@@ -288,7 +288,6 @@ def sym_dir_prod(occ_list, sym_list):
         return functools.reduce(lambda i, j:  i ^ j, [sym_list[x] for x in occ_list])
 
 def num_act(d, act_set):
-    # Stupid function. Should optimize it.
     n = 0
     for i in d:
         if (i[1] in act_set):
@@ -343,7 +342,7 @@ class EOM_MRCC:
         self.nael = wfn_cas.nalpha()
         self.nbel = wfn_cas.nbeta()
         
-        # Below is a stupid calculation of gamma1.
+        # Obtain 1-RDM.
         _frozen_docc = self.mos_spaces['FROZEN_DOCC'] if 'FROZEN_DOCC' in self.mos_spaces else [0]*self.nirrep
         mos_spaces_rdm = {
                           'FROZEN_DOCC' : _frozen_docc,
@@ -742,7 +741,6 @@ class EOM_MRCC:
                                         A_op_temp = forte.SparseOperator(antihermitian=True)
                                         T_op_temp = forte.SparseOperator(antihermitian=False)
                                         # compute the denominatorsr                                 
-                                        # These lines are stupid. 
                                         e_aocc = 0.0
                                         e_avir = 0.0
                                         e_bocc = 0.0
