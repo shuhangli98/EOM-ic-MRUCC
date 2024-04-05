@@ -4,10 +4,10 @@ This is a pilot implementation of the Equation-of-Motion internally contracted M
 The code is based on [Forte](https://github.com/evangelistalab/forte).
 
 ## Current capabilities
-- Both unitary and non-unitary versions are available.
-- Baker–Campbell–Hausdorff expression can be truncated at a certain number of commutators.
-- Supports arbitrary order excitation manifold.
-- Frozen core approximation.
+- Availability of both unitary and non-unitary versions.
+- Baker–Campbell–Hausdorff (BCH) expansion truncation at a specified number of commutators.
+- Support for arbitrary order excitation manifold.
+- Implementation of frozen core approximation.
 - Single reference EOM-CC (see cas_eom.py) based on an arbitrary starting determinant.
 
 ## To-dos
