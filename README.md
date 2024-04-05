@@ -1,5 +1,6 @@
 # My_EOM_MRCC
 This is a pilot implementation of the Equation-of-Motion internally contracted Multireference Coupled-Cluster (EOM-ic-MRCC) theory.
+This implementation is based on [Forte](https://github.com/evangelistalab/forte).
 
 ## Current capabilities
 - Both unitary and non-unitary versions are available.
