@@ -5,7 +5,7 @@ This is a pilot implementation of the Equation-of-Motion internally contracted M
 - Both unitary and non-unitary versions are available.
 - Baker–Campbell–Hausdorff expression can be truncated at a certain number of commutators.
 - Supports arbitrary order excitation manifold.
-- Frozen core approximation is implemented.
+- Frozen core approximation.
 - Single reference EOM-CC (see cas_eom.py) based on an arbitrary starting determinant.
 
 ## To-dos
