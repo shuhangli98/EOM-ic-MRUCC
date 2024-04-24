@@ -14,7 +14,7 @@ import scipy.sparse.linalg
 class Davidson(object):
     """Davidson-Liu algorithm to get the n states with smallest eigenvalues."""
     
-    def __init__(self, matrix, max_subspace = 20, max_iterations = 300, eps = 1e-6):
+    def __init__(self, matrix, max_subspace = 100, max_iterations = 300, eps = 1e-6):
         self.matrix = matrix
         self.diagonal = matrix.diagonal()
         self.max_subspace = max_subspace
@@ -69,12 +69,7 @@ class Davidson(object):
                     continue
                 max_error = max(max_error, np.linalg.norm(current_error_v))
                 
-                # M = np.identity(full_dim) - np.outer(trial_v[:, i], trial_v[:, i])
-                # shift = self.matrix - np.identity(full_dim) * trial_lambda[i]
-                # A_tilde = np.einsum('ij, jk, kl->il', M, shift, M, optimize='optimal')
-                # new_direction = scipy.sparse.linalg.gmres(A_tilde, -current_error_v, restart = 300, atol = self.eps, maxiter = self.max_iterations)
-                
-                #new_direction = []
+                new_direction = []
                 M = np.ones(full_dim)
                 for j in range(full_dim):
                     diff = self.diagonal[j] - trial_lambda[i]        
@@ -83,11 +78,18 @@ class Davidson(object):
                     else:
                         M[j] /= self.eps  
                     
-                # numerator = M * current_error_v 
-                # denominator = M * trial_v[:, i]
-                # new_direction = -current_error_v + (trial_v[:, i] * numpy.dot(trial_v[:, i], numerator) / numpy.dot(trial_v[:, i], denominator))
+                numerator = M * current_error_v 
+                denominator = M * trial_v[:, i]
+                new_direction = -current_error_v + (trial_v[:, i] * numpy.dot(trial_v[:, i], numerator) / numpy.dot(trial_v[:, i], denominator)) # This line is fine.
                 # new_direction *= M
-                new_direction = M * current_error_v # This is the Davidson-Liu way.
+                
+                # new_direction = M * current_error_v # This is the Davidson-Liu way.
+                
+                # P = np.identity(full_dim) - np.outer(trial_v[:, i], trial_v[:, i]) 
+                # A_tilde = np.diagonal(self.matrix) - np.identity(full_dim) * trial_lambda[i]
+                # M_tilde = np.einsum('ij, jk, kl->il', P, A_tilde, P, optimize='optimal')
+                # new_direction, _ = scipy.sparse.linalg.cg(M_tilde, -current_error_v, atol = self.eps, maxiter = self.max_iterations) # This is the Jacobi-Davidson way.
+                
                 new_directions.append(new_direction)
                 
                 
@@ -111,7 +113,7 @@ class Davidson(object):
                     vec_i -= guess_v[:, j] * np.dot(guess_v[:, j], vec_i)
                     
                 # Makes sure the new vector is not too small.
-                if np.max(np.abs(vec_i)) < self.eps:
+                if np.linalg.norm(vec_i) < self.eps:
                     continue
                 
                 guess_v[:, i] = vec_i / np.linalg.norm(vec_i)
@@ -129,7 +131,8 @@ class Davidson(object):
         return trial_lambda, trial_v
                     
 if (__name__=='__main__'):
-    A = np.random.rand(99, 99)
+    np.random.seed(100)
+    A = np.random.rand(500, 500)
     A = A + A.T
     
     davidson = Davidson(A)
