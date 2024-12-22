@@ -3,6 +3,8 @@ This is a pilot implementation of the Equation-of-Motion internally contracted M
 
 The code is based on [Forte](https://github.com/evangelistalab/forte).
 
+(The code is no longer working due to recent updates in Forte.)
+
 ## Current capabilities
 - Availability of both unitary and non-unitary versions.
 - Baker–Campbell–Hausdorff (BCH) expansion truncation at a specified number of commutators.
