@@ -31,3 +31,4 @@ ic_mrcc = EOM_MRCC(
 ic_mrcc.get_casci_wfn([1, 1])
 ic_mrcc.initialize_op()
 ic_mrcc.run_ic_mrcc()
+assert np.isclose(ic_mrcc.e, -15.759408790280, atol=1.0e-8)

@@ -34,5 +34,9 @@ ic_mrcc.initialize_op()
 ic_mrcc.run_ic_mrcc(
     e_convergence=1e-9, eta=-1.0, thres=1e-6, algo="oprod", max_cc_iter=0
 )
+assert np.isclose(ic_mrcc.e, -74.94207989868082, atol=1.0e-8)
 ic_mrcc.run_eom_ee_mrcc([0, 0], thres=1e-6, algo="oprod")
-
+assert np.isclose(ic_mrcc.eval_ic[1], -74.7058339380, atol=1.0e-8)
+assert np.isclose(ic_mrcc.eval_ic[2], -74.6574213703, atol=1.0e-8)
+assert np.isclose(ic_mrcc.eval_ic[3], -74.6187347560, atol=1.0e-8)
+assert np.isclose(ic_mrcc.eval_ic[4], -74.6154946067, atol=1.0e-8)

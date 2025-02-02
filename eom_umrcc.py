@@ -4,12 +4,11 @@ import time
 import numpy as np
 import copy
 import psi4
-import forte
-import forte.utils
+import forte, forte.utils
 from forte import forte_options
-import scipy
-from functools import wraps
+import scipy, scipy.constants
 import math
+eh_to_ev = scipy.constants.physical_constants["Hartree energy in eV"][0]
 
 
 def cc_residual_equations(
@@ -147,7 +146,6 @@ def update_amps_orthogonal(
             t[x] -= dT[x]
         t = diis.update(t, t_old)
     else:
-        # print("No DIIS")
         for x in range(len(t)):
             t[x] -= dT[x]
 
@@ -226,7 +224,6 @@ def orthogonalization_sokolov(
 
     numnonred = numnonred_proj + numnonred_direct
     test_close = test_orthogonalization(X, S, numnonred)
-    print(f"Orthogonalization (in sokolov function) test: {test_close}")
 
     return P, S, X, numnonred
 
@@ -262,7 +259,6 @@ def orthogonalization_sokolov_direct(
 
     numnonred = numnonred_proj + numnonred_direct
     test_close = test_orthogonalization(X, S, numnonred)
-    print(f"Orthogonalization (in sokolov_direct function) test: {test_close}")
 
     return P, S, X, numnonred
 
@@ -315,10 +311,6 @@ def orthogonalization_projective(ic_basis_full, num_op, thres=1e-6):
 
     # 6. Construct the projection matrix.
     P = U @ U.T
-
-    # 7. Test the orthogonality.
-    # test_close = test_orthogonalization(X, S, numnonred)
-    # print(f'Orthogonalization test: {test_close}')
 
     return P, S, X, numnonred
 
@@ -558,6 +550,7 @@ class EOM_MRCC:
             + self.as_ints.scalar_energy()
             + self.as_ints.nuclear_repulsion_energy()
         )
+        self.e_casci = e_casci
         print(f"CASCI Energy = {e_casci}")
         print(
             evals_casci
@@ -824,6 +817,7 @@ class EOM_MRCC:
         # diis = None
 
         # initalize E = 0
+        self.e = self.e_casci
         old_e = 0.0
 
         print("=================================================================")
@@ -1044,6 +1038,7 @@ class EOM_MRCC:
         internal_max_exc=2,
         algo="oprod",
         num_op_eom=0,
+        det_analysis=False,
     ):
 
         if not self.unitary:
@@ -1329,7 +1324,7 @@ class EOM_MRCC:
             print("Now do transformation to GNO basis.")
             S_full = self.GNO_P.T @ S_full @ self.GNO_P
             self.Hbar_ic = self.GNO_P.T @ self.Hbar_ic @ self.GNO_P
-
+        S_full = np.real(S_full)
         eigval, eigvec = np.linalg.eigh(S_full)
 
         numnonred = 0
@@ -1350,27 +1345,34 @@ class EOM_MRCC:
         X_tilde = U @ S
 
         H_ic_tilde = X_tilde.T @ self.Hbar_ic @ X_tilde
-        eval_ic, evec_ic = np.linalg.eigh(H_ic_tilde)
+        H_ic_tilde = np.real(H_ic_tilde)
+        self.eval_ic, evec_ic = np.linalg.eigh(H_ic_tilde)
 
         s2 = np.zeros((len(self.ic_basis),) * 2)
         for i in range(len(self.ic_basis)):
             for j in range(len(self.ic_basis)):
                 for di, coeff_i in self.ic_basis[i].items():
                     for dj, coeff_j in self.ic_basis[j].items():
-                        s2[i, j] += forte.spin2(di, dj).real * coeff_i * coeff_j
+                        s2[i, j] += (forte.spin2(di, dj) * coeff_i * coeff_j).real
 
         c_total = X_tilde @ evec_ic
 
         norm = np.zeros((len(evec_ic)))
-        for i in range(len(eval_ic)):
+        for i in range(len(self.eval_ic)):
             norm[i] = c_total[:, i].T @ S_full @ c_total[:, i]
 
         n_sin = 0
         n_tri = 0
         n_quintet = 0
-        for i in range(len(eval_ic)):
+        print("=" * 90)
+        print(f"{'EOM-ic-UMRCC summary':^90}")
+        print("-" * 90)
+        print(f"{'Root':<5} {'Energy (Eh)':<20} {'Exc energy (Eh)':<20} {'Exc energy (eV)':<20} {'Spin':<10} {'<S^2>':<10}")
+        print("-" * 90)
+
+        for i in range(len(self.eval_ic)):
             ci = c_total[:, i]
-            if i < 10:
+            if det_analysis and i < 10:
                 dets = []
                 coeffs = []
                 for p in range(len(ci)):
@@ -1391,20 +1393,28 @@ class EOM_MRCC:
                         f"det{dets[n_largest[ndet][1]], coeffs[n_largest[ndet][1]]} \n"
                     )
 
-            print(abs(ci.T @ s2 @ ci) / norm[i])
+            spin2 = abs(ci.T @ s2 @ ci) / norm[i]
 
-            if abs(ci.T @ s2 @ ci) / norm[i] < 1.0:
+            if spin2 < 1.0:
                 n_sin += 1
-                print(f" EOM-UMRCCSD {n_sin} singlet energy: {eval_ic[i]:20.12f} [Eh]")
-            elif 1.0 < abs(ci.T @ s2 @ ci) / norm[i] < 3.0:
+                spin = "singlet"
+                serial = str(n_sin)
+            elif 1.0 < spin2 < 3.0:
                 n_tri += 1
-                print(f" EOM-UMRCCSD {n_tri} triplet energy: {eval_ic[i]:20.12f} [Eh]")
-
-            elif 4.0 < abs(ci.T @ s2 @ ci) / norm[i] < 7.0:
+                spin = "triplet"
+                serial = str(n_tri)
+            elif 4.0 < spin2 < 7.0:
                 n_quintet += 1
-                print(f" EOM-UMRCCSD {n_quintet} quintet energy: {eval_ic[i]:20.12f}")
+                spin = "quintet"
+                serial = str(n_quintet)
             else:  # Change this.
-                print(f" EOM-UMRCCSD {i} energy: {eval_ic[i]:20.12f} [Eh]")
+                spin = "unknown"
+                serial = ""
+            print(
+                f"{i+1:<5} {self.eval_ic[i]:<20.10f} {(self.eval_ic[i]-self.e):<20.10f} {(self.eval_ic[i]-self.e)*eh_to_ev:<20.10f} {spin+' '+serial:<10} {spin2:<10.5f}"
+            )
+        print("=" * 90)
+
 
     def get_ic_coeff(self):
         self.ic_coeff = np.zeros((len(self.dets_fci), len(self.ic_basis)))

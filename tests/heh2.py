@@ -58,4 +58,5 @@ ic_mrcc.initialize_op()
 ic_mrcc.run_ic_mrcc(
     e_convergence=1e-9, eta=-1.0, thres=1e-6, algo="oprod", max_cc_iter=100
 )
+assert np.isclose(ic_mrcc.e, -3.862656342902, atol=1.0e-8)
 psi4.core.clean()
