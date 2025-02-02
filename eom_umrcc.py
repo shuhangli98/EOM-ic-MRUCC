@@ -170,33 +170,10 @@ def orthogonalization(
     eigval, eigvec = np.linalg.eigh(S)
 
     if distribution_print:
-        intervals = [
-            (10, 1),
-            (1, 1e-1),
-            (1e-1, 1e-2),
-            (1e-2, 1e-3),
-            (1e-3, 1e-4),
-            (1e-4, 1e-5),
-            (1e-5, 1e-6),
-            (1e-6, 1e-7),
-            (1e-7, 1e-8),
-            (1e-8, 1e-9),
-            (1e-9, 1e-10),
-            (1e-10, 1e-11),
-            (1e-11, 1e-12),
-            (1e-12, 1e-13),
-            (1e-13, 1e-14),
-            (1e-14, 1e-15),
-        ]
+        hist, bin_edges = np.histogram(eigval, bins=10 ** (np.arange(-14, 1.001, 1)))
+        intervals = zip([0] + list(bin_edges[:-1]), bin_edges)
 
-        interval_counts = {interval: 0 for interval in intervals}
-
-        for val in eigval:
-            for interval in intervals:
-                if interval[0] > val >= interval[1]:
-                    interval_counts[interval] += 1
-
-        for interval, count in interval_counts.items():
+        for count, interval in zip(hist, intervals):
             print(f"Interval {interval}: {count} eigenvalues")
 
     if const_num_op:
@@ -258,7 +235,6 @@ def orthogonalization_sokolov_direct(
     ic_basis_full, num_op, thres_single=1e-4, thres_double=1e-10
 ):
     ic_basis_proj = ic_basis_full[: num_op[0] + num_op[1] + 1]
-    num_op_proj = np.array([num_op[0], num_op[1]])
     P_proj, S_proj, X_proj, numnonred_proj = orthogonalization(
         ic_basis_proj, thres=thres_single
     )
@@ -390,14 +366,6 @@ def sym_dir_prod(occ_list, sym_list):
         return sym_list[occ_list[0]]
     else:
         return functools.reduce(lambda i, j: i ^ j, [sym_list[x] for x in occ_list])
-
-
-def num_act(d, act_set):
-    n = 0
-    for i in d:
-        if i[1] in act_set:
-            n += 1
-    return n
 
 
 def find_n_largest(arr, n):
@@ -616,7 +584,6 @@ class EOM_MRCC:
 
         forte_objs_fci = forte.utils.prepare_forte_objects(self.wfn_cas, mos_spaces_fci)
         as_ints_fci = forte_objs_fci["as_ints"]
-        mo_space_info_fci = forte_objs_fci["mo_space_info"]
 
         self.ham_op = forte.SparseHamiltonian(as_ints_fci)
         self.exp_op = forte.SparseExp(self.maxk, self.screen_thresh_exp)
@@ -659,16 +626,6 @@ class EOM_MRCC:
                                     #   creation : bool (true = creation, false = annihilation)
                                     #   alpha    : bool (true = alpha, false = beta)
                                     #   orb      : int  (the index of the mo)
-                                    # op = []
-                                    # for a in av:
-                                    #     op.append(f"{a}a+")
-                                    # for a in bv:
-                                    #     op.append(f"{a}b+")
-                                    # for i in reversed(bo):
-                                    #     op.append(f"{i}b-")
-                                    # for i in reversed(ao):
-                                    #     op.append(f"{i}a-")
-
                                     l = []  # a list to hold the operator triplets
                                     for i in ao:
                                         # alpha occupied
@@ -1169,11 +1126,6 @@ class EOM_MRCC:
                                                 op.append(f"{i}a-")
 
                                             # No reordering in principle.
-                                            # T_op_temp.add(
-                                            #     f"[{' '.join(op)}]",
-                                            #     1.0,
-                                            #     allow_reordering=False,
-                                            # )
                                             T_op_temp.add_term(
                                                 l, 1.0, allow_reordering=False
                                             )
@@ -1380,22 +1332,6 @@ class EOM_MRCC:
 
         eigval, eigvec = np.linalg.eigh(S_full)
 
-        # intervals = [(10, 1), (1, 1e-1), (1e-1, 1e-2), (1e-2, 1e-3), (1e-3, 1e-4),
-        #              (1e-4, 1e-5), (1e-5, 1e-6), (1e-6, 1e-7), (1e-7, 1e-8),
-        #              (1e-8, 1e-9), (1e-9, 1e-10), (1e-10, 1e-11), (1e-11, 1e-12),
-        #              (1e-12, 1e-13), (1e-13, 1e-14), (1e-14, 1e-15)]
-
-        # interval_counts = {interval: 0 for interval in intervals}
-
-        # for val in range(len(eigval)):
-        #     print(f"EOM {val} Eigenvalue: {eigval[val]}")
-        #     for interval in intervals:
-        #         if interval[0] > eigval[val] >= interval[1]:
-        #             interval_counts[interval] += 1
-
-        # for interval, count in interval_counts.items():
-        #     print(f"EOM Interval {interval}: {count} eigenvalues")
-
         numnonred = 0
         S = np.array([0])
         U = np.array([0])
@@ -1428,9 +1364,6 @@ class EOM_MRCC:
         norm = np.zeros((len(evec_ic)))
         for i in range(len(eval_ic)):
             norm[i] = c_total[:, i].T @ S_full @ c_total[:, i]
-
-        # np.save("Hbar_ic.npy", self.Hbar_ic)
-        # np.save("H_ic_tilde.npy", H_ic_tilde)
 
         n_sin = 0
         n_tri = 0
@@ -1492,7 +1425,7 @@ class EOM_MRCC:
             Hwfn_comm = self.ham_op.compute(wfn_comm, self.screen_thresh_H)
             _wfn_list = [wfn_comm]
             _Hwfn_list = [Hwfn_comm]
-            for ik in range(self.n_comm):
+            for _ in range(self.n_comm):
                 wfn_comm = forte.apply_operator(self.op_A, wfn_comm)
                 Hwfn_comm = self.ham_op.compute(wfn_comm, self.screen_thresh_H)
                 _wfn_list.append(wfn_comm)
