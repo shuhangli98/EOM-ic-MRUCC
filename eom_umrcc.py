@@ -22,7 +22,7 @@ def cc_residual_equations(
         The cluster operator
     ref : SparseState
         The reference wave function
-    ham_op : SparseHamiltonian
+    ham_op : SparseOperator
         The Hamiltonian operator
     exp_op : SparseExp
         The exponential operator
@@ -42,7 +42,7 @@ def cc_residual_equations(
         wfn = exp_op.apply_antiherm(op, ref, scaling_factor=1.0)
 
     # Step 2. Compute H exp(S)|Phi>
-    Hwfn = ham_op.compute(wfn, screen_thresh_H)
+    Hwfn = forte.apply_op(ham_op, wfn, screen_thresh_H)
 
     # Step 3. Compute exp(-S) H exp(S)|Phi>
     if is_unitary:
@@ -59,7 +59,7 @@ def cc_residual_equations(
 
 def cc_residual_equations_truncated(op, ref, ham_op, screen_thresh_H, n_comm):
     # This function is used to test the effect of truncation on the BCH expansion.
-    Hwfn = ham_op.compute(ref, screen_thresh_H)
+    Hwfn = forte.apply_op(ham_op, ref, screen_thresh_H)
     residual = forte.get_projection(op, ref, Hwfn)
     residual = np.array(residual)
     energy = forte.overlap(ref, Hwfn).real
@@ -68,10 +68,10 @@ def cc_residual_equations_truncated(op, ref, ham_op, screen_thresh_H, n_comm):
             wfn_comm = ref
             m = k - l
             for i in range(m):
-                wfn_comm = forte.apply_operator(op, wfn_comm)
-            wfn_comm = ham_op.compute(wfn_comm, screen_thresh_H)
+                wfn_comm = forte.apply_op(op, wfn_comm)
+            wfn_comm = forte.apply_op(ham_op, wfn_comm, screen_thresh_H)
             for i in range(l):
-                wfn_comm = forte.apply_operator(op, wfn_comm)
+                wfn_comm = forte.apply_op(op, wfn_comm)
             if l % 2 == 0:
                 residual += np.array(forte.get_projection(op, ref, wfn_comm)) / (
                     math.factorial(l) * math.factorial(m)
@@ -376,6 +376,23 @@ def find_n_largest(arr, n):
 
     return list(zip(elements, indices))
 
+def get_overlap(ic_basis):
+    S = np.zeros((len(ic_basis), len(ic_basis)))
+    for ibasis, i in enumerate(ic_basis):
+        for jbasis, j in enumerate(ic_basis):
+            S[ibasis, jbasis] = forte.overlap(i, j).real
+            S[jbasis, ibasis] = S[ibasis, jbasis]
+    return S
+
+
+def get_spin2(ic_basis):
+    s2 = np.zeros((len(ic_basis),) * 2)
+    for i in range(len(ic_basis)):
+        for j in range(i, len(ic_basis)):
+            s2[i, j] = (forte.spin2(ic_basis[i], ic_basis[j])).real
+            s2[j, i] = s2[i, j]
+    return s2
+
 
 class EOM_MRCC:
     def __init__(
@@ -578,7 +595,7 @@ class EOM_MRCC:
         forte_objs_fci = forte.utils.prepare_forte_objects(self.wfn_cas, mos_spaces_fci)
         as_ints_fci = forte_objs_fci["as_ints"]
 
-        self.ham_op = forte.SparseHamiltonian(as_ints_fci)
+        self.ham_op = forte.sparse_operator_hamiltonian(as_ints_fci)
         self.exp_op = forte.SparseExp(self.maxk, self.screen_thresh_exp)
         self.as_ints_fci = as_ints_fci
 
@@ -894,12 +911,12 @@ class EOM_MRCC:
                 for i in range(len(self.dets)):
                     idet = forte.SparseState({self.dets[i]: 1.0})
                     wfn_comm = idet
-                    Hwfn_comm = self.ham_op.compute(wfn_comm, self.screen_thresh_H)
+                    Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
                     _wfn_list = [wfn_comm]
                     _Hwfn_list = [Hwfn_comm]
-                    for ik in range(self.n_comm):
-                        wfn_comm = forte.apply_operator(op, wfn_comm)
-                        Hwfn_comm = self.ham_op.compute(wfn_comm, self.screen_thresh_H)
+                    for _ in range(self.n_comm):
+                        wfn_comm = forte.apply_op(op, wfn_comm)
+                        Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
                         _wfn_list.append(wfn_comm)
                         _Hwfn_list.append(Hwfn_comm)
 
@@ -933,7 +950,7 @@ class EOM_MRCC:
                                 maxk=self.maxk,
                                 screen_thresh=self.screen_thresh_exp,
                             )
-                            Hwfn = self.ham_op.compute(wfn, self.screen_thresh_H)
+                            Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
                             R = self.exp_op.compute(
                                 op,
                                 Hwfn,
@@ -954,7 +971,7 @@ class EOM_MRCC:
                             )
                         else:
                             wfn = self.exp_op.apply_op(op, idet, scaling_factor=1.0)
-                        Hwfn = self.ham_op.compute(wfn, self.screen_thresh_H)
+                        Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
                         _wfn_list.append(wfn)
                         _Hwfn_list.append(Hwfn)
 
@@ -1046,6 +1063,107 @@ class EOM_MRCC:
         if internal_max_exc > 2:
             raise Exception("EOM is only available for single and double excitations.")
 
+        self.make_eom_ic_basis(decontract_active, internal_max_exc, nelecas)
+
+        if self.commutator:
+            self.get_hbar_commutator()
+        else:
+            if algo == "oprod":
+                self.get_hbar_oprod()
+
+        S_full = get_overlap(self.ic_basis)
+
+        if not self.add_int and not self.cas_int:
+            print("Now do transformation to GNO basis.")
+            S_full = self.GNO_P.T @ S_full @ self.GNO_P
+            self.Hbar_ic = self.GNO_P.T @ self.Hbar_ic @ self.GNO_P
+        S_full = np.real(S_full)
+        eigval, eigvec = np.linalg.eigh(S_full)
+
+        numnonred = 0
+        S = np.array([0])
+        U = np.array([0])
+
+        if self.const_num_op:
+            numnonred = num_op_eom
+            print(eigval[-numnonred:])
+            S = np.diag(1.0 / np.sqrt(eigval[-numnonred:]))
+            U = eigvec[:, -numnonred:]
+        else:
+            numnonred = len(eigval[eigval > thres])
+            S = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
+            U = eigvec[:, eigval > thres]
+
+        print(f"Number of selected operators for EOM-UMRCCSD: {numnonred}")
+        X_tilde = U @ S
+
+        H_ic_tilde = X_tilde.T @ self.Hbar_ic @ X_tilde
+        H_ic_tilde = np.real(H_ic_tilde)
+        self.eval_ic, evec_ic = np.linalg.eigh(H_ic_tilde)
+
+        s2 = get_spin2(self.ic_basis)
+        
+        c_total = X_tilde @ evec_ic
+
+        norm = np.zeros((len(evec_ic)))
+        for i in range(len(self.eval_ic)):
+            norm[i] = c_total[:, i].T @ S_full @ c_total[:, i]
+
+        n_sin = 0
+        n_tri = 0
+        n_quintet = 0
+        print("=" * 90)
+        print(f"{'EOM-ic-UMRCC summary':^90}")
+        print("-" * 90)
+        print(f"{'Root':<5} {'Energy (Eh)':<20} {'Exc energy (Eh)':<20} {'Exc energy (eV)':<20} {'Spin':<10} {'<S^2>':<10}")
+        print("-" * 90)
+
+        for i in range(len(self.eval_ic)):
+            ci = c_total[:, i]
+            if det_analysis and i < 10:
+                dets = []
+                coeffs = []
+                for p in range(len(ci)):
+                    ic_basis = self.ic_basis[p]
+                    for det, coeff in ic_basis.items():
+                        if det in dets:
+                            coeffs[dets.index(det)] += ci[p] * coeff
+                        else:
+                            dets.append(det)
+                            coeffs.append(ci[p] * coeff)
+                coeffs = np.array(coeffs)
+                co_norm = np.linalg.norm(coeffs)
+                coeffs /= co_norm
+                n_largest = find_n_largest(abs(coeffs), 10)
+                print(f"the norm {np.linalg.norm(coeffs)}")
+                for ndet in range(5):
+                    print(
+                        f"det{dets[n_largest[ndet][1]], coeffs[n_largest[ndet][1]]} \n"
+                    )
+
+            spin2 = abs(ci.T @ s2 @ ci) / norm[i]
+
+            if spin2 < 1.0:
+                n_sin += 1
+                spin = "singlet"
+                serial = str(n_sin)
+            elif 1.0 < spin2 < 3.0:
+                n_tri += 1
+                spin = "triplet"
+                serial = str(n_tri)
+            elif 4.0 < spin2 < 7.0:
+                n_quintet += 1
+                spin = "quintet"
+                serial = str(n_quintet)
+            else:  # Change this.
+                spin = "unknown"
+                serial = ""
+            print(
+                f"{i+1:<5} {self.eval_ic[i]:<20.10f} {(self.eval_ic[i]-self.e):<20.10f} {(self.eval_ic[i]-self.e)*eh_to_ev:<20.10f} {spin+' '+serial:<10} {spin2:<10.5f}"
+            )
+        print("=" * 90)
+
+    def make_eom_ic_basis(self, decontract_active, internal_max_exc, nelecas):
         # Separate single and double ic_basis.
         self.ic_basis_single = [self.psi]
         self.ic_basis_double = []
@@ -1058,7 +1176,7 @@ class EOM_MRCC:
 
         diag_1 = list(np.zeros(len(self.ic_basis_single)))  # With Psi.
         diag_2 = list(np.zeros(len(self.ic_basis_double)))
-
+        
         if not self.add_int and not self.cas_int:
             if decontract_active:
                 for i in self.dets:
@@ -1301,119 +1419,7 @@ class EOM_MRCC:
                 self.GNO_P[0, :] = np.array(diag_total).copy()
 
                 print("GNO ends.")
-
         print(f" Number of ic_basis for EOM_UMRCC: {len(self.ic_basis)}")
-
-        if self.commutator:
-            self.get_hbar_commutator()
-        else:
-            if algo == "matmul":
-                self.get_hbar_matmul()
-            elif algo == "naive":
-                self.get_hbar_naive()
-            elif algo == "oprod":
-                self.get_hbar_oprod()
-
-        S_full = np.zeros((len(self.ic_basis), len(self.ic_basis)))
-        for ibasis, i in enumerate(self.ic_basis):
-            for jbasis, j in enumerate(self.ic_basis):
-                S_full[ibasis, jbasis] = forte.overlap(i, j).real
-                S_full[jbasis, ibasis] = S_full[ibasis, jbasis]
-
-        if not self.add_int and not self.cas_int:
-            print("Now do transformation to GNO basis.")
-            S_full = self.GNO_P.T @ S_full @ self.GNO_P
-            self.Hbar_ic = self.GNO_P.T @ self.Hbar_ic @ self.GNO_P
-        S_full = np.real(S_full)
-        eigval, eigvec = np.linalg.eigh(S_full)
-
-        numnonred = 0
-        S = np.array([0])
-        U = np.array([0])
-
-        if self.const_num_op:
-            numnonred = num_op_eom
-            print(eigval[-numnonred:])
-            S = np.diag(1.0 / np.sqrt(eigval[-numnonred:]))
-            U = eigvec[:, -numnonred:]
-        else:
-            numnonred = len(eigval[eigval > thres])
-            S = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
-            U = eigvec[:, eigval > thres]
-
-        print(f"Number of selected operators for EOM-UMRCCSD: {numnonred}")
-        X_tilde = U @ S
-
-        H_ic_tilde = X_tilde.T @ self.Hbar_ic @ X_tilde
-        H_ic_tilde = np.real(H_ic_tilde)
-        self.eval_ic, evec_ic = np.linalg.eigh(H_ic_tilde)
-
-        s2 = np.zeros((len(self.ic_basis),) * 2)
-        for i in range(len(self.ic_basis)):
-            for j in range(len(self.ic_basis)):
-                for di, coeff_i in self.ic_basis[i].items():
-                    for dj, coeff_j in self.ic_basis[j].items():
-                        s2[i, j] += (forte.spin2(di, dj) * coeff_i * coeff_j).real
-
-        c_total = X_tilde @ evec_ic
-
-        norm = np.zeros((len(evec_ic)))
-        for i in range(len(self.eval_ic)):
-            norm[i] = c_total[:, i].T @ S_full @ c_total[:, i]
-
-        n_sin = 0
-        n_tri = 0
-        n_quintet = 0
-        print("=" * 90)
-        print(f"{'EOM-ic-UMRCC summary':^90}")
-        print("-" * 90)
-        print(f"{'Root':<5} {'Energy (Eh)':<20} {'Exc energy (Eh)':<20} {'Exc energy (eV)':<20} {'Spin':<10} {'<S^2>':<10}")
-        print("-" * 90)
-
-        for i in range(len(self.eval_ic)):
-            ci = c_total[:, i]
-            if det_analysis and i < 10:
-                dets = []
-                coeffs = []
-                for p in range(len(ci)):
-                    ic_basis = self.ic_basis[p]
-                    for det, coeff in ic_basis.items():
-                        if det in dets:
-                            coeffs[dets.index(det)] += ci[p] * coeff
-                        else:
-                            dets.append(det)
-                            coeffs.append(ci[p] * coeff)
-                coeffs = np.array(coeffs)
-                co_norm = np.linalg.norm(coeffs)
-                coeffs /= co_norm
-                n_largest = find_n_largest(abs(coeffs), 10)
-                print(f"the norm {np.linalg.norm(coeffs)}")
-                for ndet in range(5):
-                    print(
-                        f"det{dets[n_largest[ndet][1]], coeffs[n_largest[ndet][1]]} \n"
-                    )
-
-            spin2 = abs(ci.T @ s2 @ ci) / norm[i]
-
-            if spin2 < 1.0:
-                n_sin += 1
-                spin = "singlet"
-                serial = str(n_sin)
-            elif 1.0 < spin2 < 3.0:
-                n_tri += 1
-                spin = "triplet"
-                serial = str(n_tri)
-            elif 4.0 < spin2 < 7.0:
-                n_quintet += 1
-                spin = "quintet"
-                serial = str(n_quintet)
-            else:  # Change this.
-                spin = "unknown"
-                serial = ""
-            print(
-                f"{i+1:<5} {self.eval_ic[i]:<20.10f} {(self.eval_ic[i]-self.e):<20.10f} {(self.eval_ic[i]-self.e)*eh_to_ev:<20.10f} {spin+' '+serial:<10} {spin2:<10.5f}"
-            )
-        print("=" * 90)
 
 
     def get_ic_coeff(self):
@@ -1432,12 +1438,12 @@ class EOM_MRCC:
         for ibasis in range(len(self.ic_basis)):
             i = self.ic_basis[ibasis]
             wfn_comm = i
-            Hwfn_comm = self.ham_op.compute(wfn_comm, self.screen_thresh_H)
+            Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
             _wfn_list = [wfn_comm]
             _Hwfn_list = [Hwfn_comm]
             for _ in range(self.n_comm):
-                wfn_comm = forte.apply_operator(self.op_A, wfn_comm)
-                Hwfn_comm = self.ham_op.compute(wfn_comm, self.screen_thresh_H)
+                wfn_comm = forte.apply_op(self.op_A, wfn_comm)
+                Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
                 _wfn_list.append(wfn_comm)
                 _Hwfn_list.append(Hwfn_comm)
 
@@ -1458,56 +1464,6 @@ class EOM_MRCC:
                 self.Hbar_ic[jbasis, ibasis] = energy
                 self.Hbar_ic[ibasis, jbasis] = energy
 
-    def get_hbar_matmul(self):
-        if self.unitary:
-            op = self.op_A
-        else:
-            op = self.op_T
-
-        ndets_fci = len(self.dets_fci)
-        self.amp_elements = np.zeros((ndets_fci, ndets_fci))
-        for i in range(len(self.dets_fci)):
-            for j in range(i + 1):
-                wfn = forte.apply_operator(
-                    op, forte.SparseState({self.dets_fci[j]: 1.0})
-                )
-                self.amp_elements[i, j] = forte.overlap(
-                    forte.SparseState({self.dets_fci[i]: 1.0}), wfn
-                ).real
-                if i != j:
-                    self.H_fci[j, i] = self.H_fci[i, j]
-                    self.amp_elements[j, i] = -self.amp_elements[i, j]
-
-        self.Hbar_ic = (
-            scipy.linalg.expm(-1.0 * self.amp_elements)
-            @ self.H_fci
-            @ scipy.linalg.expm(self.amp_elements)
-        )
-        self.Hbar_ic = self.ic_coeff.T @ self.Hbar_ic @ self.ic_coeff
-
-    def get_hbar_naive(self):
-        self.Hbar_ic = np.zeros((len(self.ic_basis),) * 2)
-        for ibasis in range(len(self.ic_basis)):
-            for jbasis in range(len(self.ic_basis)):
-                i = self.ic_basis[ibasis]
-                j = self.ic_basis[jbasis]
-                wfn = self.exp_op.compute(
-                    self.op_A,
-                    i,
-                    scaling_factor=1.0,
-                    maxk=self.maxk,
-                    screen_thresh=self.screen_thresh_exp,
-                )
-                Hwfn = self.ham_op.compute(wfn, self.screen_thresh_H)
-                Heffwfn = self.exp_op.compute(
-                    self.op_A,
-                    Hwfn,
-                    scaling_factor=-1.0,
-                    maxk=self.maxk,
-                    screen_thresh=self.screen_thresh_exp,
-                )
-                self.Hbar_ic[ibasis, jbasis] = forte.overlap(j, Heffwfn).real
-
     def get_hbar_oprod(self):
         self.Hbar_ic = np.zeros((len(self.ic_basis),) * 2)
         _wfn_list = []
@@ -1519,7 +1475,7 @@ class EOM_MRCC:
                 wfn = self.exp_op.apply_antiherm(self.op_A, i, scaling_factor=1.0)
             else:
                 wfn = self.exp_op.apply_op(self.op_A, i, scaling_factor=1.0)
-            Hwfn = self.ham_op.compute(wfn, self.screen_thresh_H)
+            Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
             _wfn_list.append(wfn)
             _Hwfn_list.append(Hwfn)
 
