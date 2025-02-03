@@ -8,11 +8,12 @@ import forte, forte.utils
 from forte import forte_options
 import scipy, scipy.constants
 import math
+
 eh_to_ev = scipy.constants.physical_constants["Hartree energy in eV"][0]
 
 
 def cc_residual_equations(
-    op, ref, ham_op, exp_op, is_unitary, maxk, screen_thresh_H, screen_thresh_exp
+    op, ref, ham_op, exp_op, is_unitary, maxk, screen_thresh_H
 ):
     """This function implements the CC residual equation
 
@@ -67,10 +68,10 @@ def cc_residual_equations_truncated(op, ref, ham_op, screen_thresh_H, n_comm):
         for l in range(k + 1):
             wfn_comm = ref
             m = k - l
-            for i in range(m):
+            for _ in range(m):
                 wfn_comm = forte.apply_op(op, wfn_comm)
             wfn_comm = forte.apply_op(ham_op, wfn_comm, screen_thresh_H)
-            for i in range(l):
+            for _ in range(l):
                 wfn_comm = forte.apply_op(op, wfn_comm)
             if l % 2 == 0:
                 residual += np.array(forte.get_projection(op, ref, wfn_comm)) / (
@@ -160,11 +161,7 @@ def orthogonalization(
     ic_basis = ic_basis_full[1:]
     namps = len(ic_basis)
 
-    S = np.zeros((namps, namps))
-    for ibasis, i in enumerate(ic_basis):
-        for jbasis, j in enumerate(ic_basis):
-            S[ibasis, jbasis] = forte.overlap(i, j).real
-            S[jbasis, ibasis] = S[ibasis, jbasis]
+    S = get_overlap(ic_basis)
     eigval, eigvec = np.linalg.eigh(S)
 
     if distribution_print:
@@ -223,7 +220,6 @@ def orthogonalization_sokolov(
     ]
 
     numnonred = numnonred_proj + numnonred_direct
-    test_close = test_orthogonalization(X, S, numnonred)
 
     return P, S, X, numnonred
 
@@ -258,7 +254,6 @@ def orthogonalization_sokolov_direct(
     ]
 
     numnonred = numnonred_proj + numnonred_direct
-    test_close = test_orthogonalization(X, S, numnonred)
 
     return P, S, X, numnonred
 
@@ -271,11 +266,7 @@ def orthogonalization_projective(ic_basis_full, num_op, thres=1e-6):
     namps_1 = len(ic_basis_1)
     namps_2 = len(ic_basis_2)
     namps = namps_1 + namps_2
-    S = np.zeros((namps, namps))
-    for ibasis, i in enumerate(ic_basis_full[1:]):
-        for jbasis, j in enumerate(ic_basis_full[1:]):
-            S[ibasis, jbasis] = forte.overlap(i, j).real
-            S[jbasis, ibasis] = S[ibasis, jbasis]
+    S = get_overlap(ic_basis_full[1:])
     X = np.zeros((namps, namps))
 
     # 1. Orthogonalize the single excitation block.
@@ -319,11 +310,7 @@ def orthogonalization_GNO(ic_basis_full, Y, thres=1e-6):
     ic_basis = ic_basis_full[1:]
     namps = len(ic_basis)
     # 1. Construct metric matrix.
-    S = np.zeros((namps, namps))
-    for ibasis, i in enumerate(ic_basis):
-        for jbasis, j in enumerate(ic_basis):
-            S[ibasis, jbasis] = forte.overlap(i, j).real
-            S[jbasis, ibasis] = S[ibasis, jbasis]
+    S = get_overlap(ic_basis)
 
     # 2. Tranform the metric matrix in the basis of GNO excitation operators.
     S_GNO = Y.T @ S @ Y
@@ -340,14 +327,6 @@ def orthogonalization_GNO(ic_basis_full, Y, thres=1e-6):
     Y_inv = np.linalg.inv(Y)
     P = Y @ U @ U.T @ Y_inv  # Transformed P matrix
     return P, S, X, numnonred
-
-
-def test_orthogonalization(X, S, numnonred):
-    XSX = X.T @ S @ X
-    I = np.zeros_like(S)
-    np.fill_diagonal(I[:numnonred, :numnonred], 1.0)
-    test_close = np.allclose(XSX, I)
-    return test_close
 
 
 def sym_dir_prod(occ_list, sym_list):
@@ -376,12 +355,14 @@ def find_n_largest(arr, n):
 
     return list(zip(elements, indices))
 
+
 def get_overlap(ic_basis):
-    S = np.zeros((len(ic_basis), len(ic_basis)))
-    for ibasis, i in enumerate(ic_basis):
-        for jbasis, j in enumerate(ic_basis):
-            S[ibasis, jbasis] = forte.overlap(i, j).real
-            S[jbasis, ibasis] = S[ibasis, jbasis]
+    n = len(ic_basis)
+    S = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i, n):
+            S[i, j] = (forte.overlap(ic_basis[i], ic_basis[j])).real
+            S[j, i] = S[i, j]
     return S
 
 
@@ -724,7 +705,9 @@ class EOM_MRCC:
 
                                         self.num_op[n - 1] += 1
                                         self.ic_basis.append(T_op_temp @ self.psi)
-                                        self.oprator_list.append(T_op_temp)
+                                        self.oprator_list.append(
+                                            T_op_temp.to_operator()
+                                        )
                                         # a_{ij..}^{ab..} * (t_{ij..}^{ab..} - t_{ab..}^{ij..})
                                         self.op_A.add_term(
                                             l,
@@ -840,32 +823,9 @@ class EOM_MRCC:
         print("=================================================================")
         print("   Iteration     Energy (Eh)       Delta Energy (Eh)    Time (s)")
         print("-----------------------------------------------------------------")
-        if self.ortho == "direct":
-            P, S, X, numnonred = orthogonalization(
-                ic_basis, thres=thres, const_num_op=self.const_num_op, num_op=num_op
-            )
-        elif self.ortho == "projective":
-            P, S, X, numnonred = orthogonalization_projective(
-                ic_basis, self.num_op, thres=thres
-            )
-        elif self.ortho == "GNO":
-            P, S, X, numnonred = orthogonalization_GNO(
-                ic_basis, self.GNO_Y, thres=thres
-            )
-        elif self.ortho == "sokolov":
-            P, S, X, numnonred = orthogonalization_sokolov(
-                ic_basis, self.num_op, thres_single=thres, thres_double=thres_double
-            )
-        elif self.ortho == "sokolov_direct":
-            P, S, X, numnonred = orthogonalization_sokolov_direct(
-                ic_basis, self.num_op, thres_single=thres, thres_double=thres_double
-            )
+        P, S, X, numnonred = self.orthogonalize_ic_mrcc(ic_basis, thres, thres_double)
 
         radius = 0.01
-
-        # self.residual, self.e = cc_residual_equations(
-        #     op, self.psi, self.ham_op, self.exp_op, self.maxk, self.screen_thresh_H, self.screen_thresh_exp)
-        # print(f'Initial energy: {self.e}')
 
         for iter in range(max_cc_iter):
             # 1. evaluate the CC residual equations.
@@ -882,7 +842,6 @@ class EOM_MRCC:
                     self.unitary,
                     self.maxk,
                     self.screen_thresh_H,
-                    self.screen_thresh_exp,
                 )  # Full BCH expansion.
             if (self.e.real - old_e.real) > 0.0:
                 if radius > 1e-7:
@@ -904,116 +863,16 @@ class EOM_MRCC:
             )
 
             # 3. Form Heff
-            Heff = np.zeros((len(self.dets), len(self.dets)))
-            if self.commutator:
-                _wfn_map_full = []
-                _Hwfn_map_full = []
-                for i in range(len(self.dets)):
-                    idet = forte.SparseState({self.dets[i]: 1.0})
-                    wfn_comm = idet
-                    Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
-                    _wfn_list = [wfn_comm]
-                    _Hwfn_list = [Hwfn_comm]
-                    for _ in range(self.n_comm):
-                        wfn_comm = forte.apply_op(op, wfn_comm)
-                        Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
-                        _wfn_list.append(wfn_comm)
-                        _Hwfn_list.append(Hwfn_comm)
-
-                    _wfn_map_full.append(_wfn_list)
-                    _Hwfn_map_full.append(_Hwfn_list)
-
-                for i in range(len(self.dets)):
-                    for j in range(i + 1):
-                        energy = 0.0
-                        for k in range(self.n_comm + 1):
-                            for l in range(k + 1):
-                                m = k - l
-                                right_wfn = _Hwfn_map_full[i][m]
-                                left_wfn = _wfn_map_full[j][l]
-                                energy += forte.overlap(left_wfn, right_wfn).real / (
-                                    math.factorial(l) * math.factorial(m)
-                                )
-                        Heff[j, i] = energy
-                        Heff[i, j] = energy
-            else:
-                if algo == "naive":
-                    Heff = np.zeros((len(self.dets), len(self.dets)))
-                    for i in range(len(self.dets)):
-                        for j in range(len(self.dets)):
-                            idet = forte.SparseState({self.dets[i]: 1.0})
-                            jdet = forte.SparseState({self.dets[j]: 1.0})
-                            wfn = self.exp_op.compute(
-                                op,
-                                jdet,
-                                scaling_factor=1.0,
-                                maxk=self.maxk,
-                                screen_thresh=self.screen_thresh_exp,
-                            )
-                            Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
-                            R = self.exp_op.compute(
-                                op,
-                                Hwfn,
-                                scaling_factor=-1.0,
-                                maxk=self.maxk,
-                                screen_thresh=self.screen_thresh_exp,
-                            )
-                            Heff[i, j] = forte.overlap(idet, R).real
-                if algo == "oprod":
-                    _wfn_list = []
-                    _Hwfn_list = []
-
-                    for i in range(len(self.dets)):
-                        idet = forte.SparseState({self.dets[i]: 1.0})
-                        if self.unitary:
-                            wfn = self.exp_op.apply_antiherm(
-                                op, idet, scaling_factor=1.0
-                            )
-                        else:
-                            wfn = self.exp_op.apply_op(op, idet, scaling_factor=1.0)
-                        Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
-                        _wfn_list.append(wfn)
-                        _Hwfn_list.append(Hwfn)
-
-                    for i in range(len(self.dets)):
-                        for j in range(len(self.dets)):
-                            Heff[i, j] = forte.overlap(_wfn_list[i], _Hwfn_list[j]).real
-                            Heff[j, i] = Heff[i, j]
-
+            Heff = self.form_ic_mrcc_heff(op)
             w, vr = scipy.linalg.eig(Heff)
             vr = np.real(vr)
             idx = np.argmin(np.real(w))
             self.psi = forte.SparseState(dict(zip(self.dets, vr[:, idx])))
+            ic_basis_new = self.make_new_ic_basis()
 
-            ic_basis_new = [self.psi]
-            for x in range(len(self.oprator_list)):
-                ic_basis_new.append(self.oprator_list[x] @ self.psi)
-
-            if self.ortho == "direct":
-                P, S, X, numnonred = orthogonalization(ic_basis_new, thres=thres)
-            elif self.ortho == "projective":
-                P, S, X, numnonred = orthogonalization_projective(
-                    ic_basis_new, self.num_op, thres=thres
-                )
-            elif self.ortho == "GNO":
-                P, S, X, numnonred = orthogonalization_GNO(
-                    ic_basis_new, self.GNO_Y, thres=thres
-                )
-            elif self.ortho == "sokolov":
-                P, S, X, numnonred = orthogonalization_sokolov(
-                    ic_basis_new,
-                    self.num_op,
-                    thres_single=thres,
-                    thres_double=thres_double,
-                )
-            elif self.ortho == "sokolov_direct":
-                P, S, X, numnonred = orthogonalization_sokolov_direct(
-                    ic_basis_new,
-                    self.num_op,
-                    thres_single=thres,
-                    thres_double=thres_double,
-                )
-
+            P, S, X, numnonred = self.orthogonalize_ic_mrcc(
+                ic_basis_new, thres, thres_double
+            )
             # 4. print information
             print(
                 f"{iter:9d} {self.e:20.12f} {self.e - old_e:20.12f} {time.time() - start:11.3f}"
@@ -1046,6 +905,95 @@ class EOM_MRCC:
 
                 break
             old_e = self.e
+
+    def form_ic_mrcc_heff(self, op):
+        Heff = np.zeros((len(self.dets), len(self.dets)))
+        if self.commutator:
+            _wfn_map_full = []
+            _Hwfn_map_full = []
+            for i in range(len(self.dets)):
+                idet = forte.SparseState({self.dets[i]: 1.0})
+                wfn_comm = idet
+                Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
+                _wfn_list = [wfn_comm]
+                _Hwfn_list = [Hwfn_comm]
+                for _ in range(self.n_comm):
+                    wfn_comm = forte.apply_op(op, wfn_comm)
+                    Hwfn_comm = forte.apply_op(
+                        self.ham_op, wfn_comm, self.screen_thresh_H
+                    )
+                    _wfn_list.append(wfn_comm)
+                    _Hwfn_list.append(Hwfn_comm)
+
+                _wfn_map_full.append(_wfn_list)
+                _Hwfn_map_full.append(_Hwfn_list)
+
+            for i in range(len(self.dets)):
+                for j in range(i + 1):
+                    energy = 0.0
+                    for k in range(self.n_comm + 1):
+                        for l in range(k + 1):
+                            m = k - l
+                            right_wfn = _Hwfn_map_full[i][m]
+                            left_wfn = _wfn_map_full[j][l]
+                            energy += forte.overlap(left_wfn, right_wfn).real / (
+                                math.factorial(l) * math.factorial(m)
+                            )
+                    Heff[j, i] = energy
+                    Heff[i, j] = energy
+        else:
+            _wfn_list = []
+            _Hwfn_list = []
+
+            for i in range(len(self.dets)):
+                idet = forte.SparseState({self.dets[i]: 1.0})
+                if self.unitary:
+                    wfn = self.exp_op.apply_antiherm(op, idet, scaling_factor=1.0)
+                else:
+                    wfn = self.exp_op.apply_op(op, idet, scaling_factor=1.0)
+                Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
+                _wfn_list.append(wfn)
+                _Hwfn_list.append(Hwfn)
+
+            for i in range(len(self.dets)):
+                for j in range(len(self.dets)):
+                    Heff[i, j] = forte.overlap(_wfn_list[i], _Hwfn_list[j]).real
+                    Heff[j, i] = Heff[i, j]
+
+        return Heff
+
+    def orthogonalize_ic_mrcc(self, ic_basis_new, thres, thres_double):
+        if self.ortho == "direct":
+            P, S, X, numnonred = orthogonalization(ic_basis_new, thres=thres)
+        elif self.ortho == "projective":
+            P, S, X, numnonred = orthogonalization_projective(
+                ic_basis_new, self.num_op, thres=thres
+            )
+        elif self.ortho == "GNO":
+            P, S, X, numnonred = orthogonalization_GNO(
+                ic_basis_new, self.GNO_Y, thres=thres
+            )
+        elif self.ortho == "sokolov":
+            P, S, X, numnonred = orthogonalization_sokolov(
+                ic_basis_new,
+                self.num_op,
+                thres_single=thres,
+                thres_double=thres_double,
+            )
+        elif self.ortho == "sokolov_direct":
+            P, S, X, numnonred = orthogonalization_sokolov_direct(
+                ic_basis_new,
+                self.num_op,
+                thres_single=thres,
+                thres_double=thres_double,
+            )
+        return P, S, X, numnonred
+
+    def make_new_ic_basis(self):
+        ic_basis_new = [self.psi]
+        for i in range(len(self.oprator_list)):
+            ic_basis_new.append(forte.apply_op(self.oprator_list[i], self.psi))
+        return ic_basis_new
 
     def run_eom_ee_mrcc(
         self,
@@ -1102,7 +1050,7 @@ class EOM_MRCC:
         self.eval_ic, evec_ic = np.linalg.eigh(H_ic_tilde)
 
         s2 = get_spin2(self.ic_basis)
-        
+
         c_total = X_tilde @ evec_ic
 
         norm = np.zeros((len(evec_ic)))
@@ -1115,7 +1063,9 @@ class EOM_MRCC:
         print("=" * 90)
         print(f"{'EOM-ic-UMRCC summary':^90}")
         print("-" * 90)
-        print(f"{'Root':<5} {'Energy (Eh)':<20} {'Exc energy (Eh)':<20} {'Exc energy (eV)':<20} {'Spin':<10} {'<S^2>':<10}")
+        print(
+            f"{'Root':<5} {'Energy (Eh)':<20} {'Exc energy (Eh)':<20} {'Exc energy (eV)':<20} {'Spin':<10} {'<S^2>':<10}"
+        )
         print("-" * 90)
 
         for i in range(len(self.eval_ic)):
@@ -1176,7 +1126,7 @@ class EOM_MRCC:
 
         diag_1 = list(np.zeros(len(self.ic_basis_single)))  # With Psi.
         diag_2 = list(np.zeros(len(self.ic_basis_double)))
-        
+
         if not self.add_int and not self.cas_int:
             if decontract_active:
                 for i in self.dets:
@@ -1420,7 +1370,6 @@ class EOM_MRCC:
 
                 print("GNO ends.")
         print(f" Number of ic_basis for EOM_UMRCC: {len(self.ic_basis)}")
-
 
     def get_ic_coeff(self):
         self.ic_coeff = np.zeros((len(self.dets_fci), len(self.ic_basis)))
