@@ -12,9 +12,7 @@ import math
 eh_to_ev = scipy.constants.physical_constants["Hartree energy in eV"][0]
 
 
-def cc_residual_equations(
-    op, ref, ham_op, exp_op, is_unitary, maxk, screen_thresh_H
-):
+def cc_residual_equations(op, ref, ham_op, exp_op, is_unitary, screen_thresh_H):
     """This function implements the CC residual equation
 
     Parameters
@@ -154,9 +152,7 @@ def update_amps_orthogonal(
     op.set_coefficients(list(t_proj))
 
 
-def orthogonalization(
-    ic_basis_full, thres=1e-6, distribution_print=False, const_num_op=False, num_op=0
-):
+def orthogonalization(ic_basis_full, thres=1e-6, distribution_print=False):
     # Evangelista and Gauss: full-orthogonalization.
     ic_basis = ic_basis_full[1:]
     namps = len(ic_basis)
@@ -171,27 +167,20 @@ def orthogonalization(
         for count, interval in zip(hist, intervals):
             print(f"Interval {interval}: {count} eigenvalues")
 
-    if const_num_op:
-        numnonred = num_op
-        X = np.zeros((namps, namps))
-        U = eigvec[:, -numnonred:]
-        S_diag_large = np.diag(1.0 / np.sqrt(eigval[-numnonred:]))
-        X[:, :numnonred] = U @ S_diag_large
-        P = U @ U.T
-    else:
-        numnonred = len(eigval[eigval > thres])
-        X = np.zeros((namps, namps))
-        U = eigvec[:, eigval > thres]
-        S_diag_large = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
-        X[:, :numnonred] = U @ S_diag_large
-        P = U @ U.T
+    numnonred = len(eigval[eigval > thres])
+    X = np.zeros((namps, namps))
+    U = eigvec[:, eigval > thres]
+    S_diag_large = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
+    X[:, :numnonred] = U @ S_diag_large
+    P = U @ U.T
 
     return P, S, X, numnonred
 
 
 def orthogonalization_sokolov(
-    ic_basis_full, num_op, thres_single=1e-4, thres_double=1e-10
+    ic_basis_full, num_op, thres_single=1e-4, thres_double=1e-8
 ):
+    # Double thresholds. No GNO.
     ic_basis_proj = ic_basis_full[: num_op[0] + num_op[1] + 1]
     num_op_proj = np.array([num_op[0], num_op[1]])
     P_proj, S_proj, X_proj, numnonred_proj = orthogonalization_projective(
@@ -227,6 +216,7 @@ def orthogonalization_sokolov(
 def orthogonalization_sokolov_direct(
     ic_basis_full, num_op, thres_single=1e-4, thres_double=1e-10
 ):
+    # Double thresholds. No GNO.
     ic_basis_proj = ic_basis_full[: num_op[0] + num_op[1] + 1]
     P_proj, S_proj, X_proj, numnonred_proj = orthogonalization(
         ic_basis_proj, thres=thres_single
@@ -260,7 +250,7 @@ def orthogonalization_sokolov_direct(
 
 def orthogonalization_projective(ic_basis_full, num_op, thres=1e-6):
     # The ic_basis_full must bave block structure.
-    # This is the sequential orthogonalization.
+    # Sequential orthogonalization.
     ic_basis_1 = ic_basis_full[1 : num_op[0] + 1]
     ic_basis_2 = ic_basis_full[num_op[0] + 1 :]
     namps_1 = len(ic_basis_1)
@@ -388,8 +378,6 @@ class EOM_MRCC:
         screen_thresh_H=0.0,
         screen_thresh_exp=1e-12,
         ortho="direct",
-        const_num_op=False,
-        add_int=False,
         cas_int=False,
         commutator=False,
         n_comm=2,
@@ -481,13 +469,9 @@ class EOM_MRCC:
 
         if self.verbose:
             print(f"{self.ea=}")
-        if self.verbose:
-            print(f"{self.ea=}")
 
         # Some additional parameters.
         self.ortho = ortho
-        self.const_num_op = const_num_op
-        self.add_int = add_int
         self.cas_int = cas_int
         self.commutator = commutator
         self.n_comm = n_comm
@@ -631,7 +615,7 @@ class EOM_MRCC:
                                         # alpha virtual
                                         l.append((True, True, a))
                                     all_in_act = all(item[2] in self.act for item in l)
-                                    if not all_in_act or self.add_int:
+                                    if not all_in_act:
                                         A_op_temp = forte.SparseOperatorList()
                                         T_op_temp = forte.SparseOperatorList()
                                         # compute the denominators
@@ -795,10 +779,8 @@ class EOM_MRCC:
         e_convergence=1.0e-12,
         max_cc_iter=500,
         eta=0.1,
-        thres=1e-6,
-        thres_double=1e-10,
-        algo="oprod",
-        num_op=0,
+        thres=1e-4,
+        thres_double=1e-8,
     ):
         start = time.time()
         if self.unitary:
@@ -840,7 +822,6 @@ class EOM_MRCC:
                     self.ham_op,
                     self.exp_op,
                     self.unitary,
-                    self.maxk,
                     self.screen_thresh_H,
                 )  # Full BCH expansion.
             if (self.e.real - old_e.real) > 0.0:
@@ -942,23 +923,31 @@ class EOM_MRCC:
                     Heff[j, i] = energy
                     Heff[i, j] = energy
         else:
-            _wfn_list = []
-            _Hwfn_list = []
+            if self.unitary:
+                _wfn_list = []
+                _Hwfn_list = []
 
-            for i in range(len(self.dets)):
-                idet = forte.SparseState({self.dets[i]: 1.0})
-                if self.unitary:
+                for i in range(len(self.dets)):
+                    idet = forte.SparseState({self.dets[i]: 1.0})
                     wfn = self.exp_op.apply_antiherm(op, idet, scaling_factor=1.0)
-                else:
-                    wfn = self.exp_op.apply_op(op, idet, scaling_factor=1.0)
-                Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
-                _wfn_list.append(wfn)
-                _Hwfn_list.append(Hwfn)
+                    Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
+                    _wfn_list.append(wfn)
+                    _Hwfn_list.append(Hwfn)
 
-            for i in range(len(self.dets)):
-                for j in range(len(self.dets)):
-                    Heff[i, j] = forte.overlap(_wfn_list[i], _Hwfn_list[j]).real
-                    Heff[j, i] = Heff[i, j]
+                for i in range(len(self.dets)):
+                    for j in range(len(self.dets)):
+                        Heff[i, j] = forte.overlap(_wfn_list[i], _Hwfn_list[j]).real
+                        Heff[j, i] = Heff[i, j]
+            else:
+                Heff = np.zeros((len(self.dets), len(self.dets)))
+                for i in range(len(self.dets)):
+                    for j in range(len(self.dets)):
+                        idet = forte.SparseState({self.dets[i]: 1.0})
+                        jdet = forte.SparseState({self.dets[j]: 1.0})
+                        wfn = self.exp_op.apply_op(op, jdet, scaling_factor=1.0)
+                        Hwfn = forte.apply_op(self.ham_op, wfn, self.screen_thresh_H)
+                        R = self.exp_op.apply_op(op, Hwfn, scaling_factor=-1.0)
+                        Heff[i, j] = forte.overlap(idet, R)
 
         return Heff
 
@@ -999,10 +988,7 @@ class EOM_MRCC:
         self,
         nelecas,
         thres=1e-6,
-        decontract_active=False,
         internal_max_exc=2,
-        algo="oprod",
-        num_op_eom=0,
         det_analysis=False,
     ):
 
@@ -1011,17 +997,17 @@ class EOM_MRCC:
         if internal_max_exc > 2:
             raise Exception("EOM is only available for single and double excitations.")
 
-        self.make_eom_ic_basis(decontract_active, internal_max_exc, nelecas)
+        self.make_eom_ic_basis(internal_max_exc, nelecas)
 
         if self.commutator:
             self.get_hbar_commutator()
         else:
-            if algo == "oprod":
+            if self.unitary:
                 self.get_hbar_oprod()
 
         S_full = get_overlap(self.ic_basis)
 
-        if not self.add_int and not self.cas_int:
+        if not self.cas_int:
             print("Now do transformation to GNO basis.")
             S_full = self.GNO_P.T @ S_full @ self.GNO_P
             self.Hbar_ic = self.GNO_P.T @ self.Hbar_ic @ self.GNO_P
@@ -1032,15 +1018,9 @@ class EOM_MRCC:
         S = np.array([0])
         U = np.array([0])
 
-        if self.const_num_op:
-            numnonred = num_op_eom
-            print(eigval[-numnonred:])
-            S = np.diag(1.0 / np.sqrt(eigval[-numnonred:]))
-            U = eigvec[:, -numnonred:]
-        else:
-            numnonred = len(eigval[eigval > thres])
-            S = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
-            U = eigvec[:, eigval > thres]
+        numnonred = len(eigval[eigval > thres])
+        S = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
+        U = eigvec[:, eigval > thres]
 
         print(f"Number of selected operators for EOM-UMRCCSD: {numnonred}")
         X_tilde = U @ S
@@ -1113,7 +1093,7 @@ class EOM_MRCC:
             )
         print("=" * 90)
 
-    def make_eom_ic_basis(self, decontract_active, internal_max_exc, nelecas):
+    def make_eom_ic_basis(self, internal_max_exc, nelecas):
         # Separate single and double ic_basis.
         self.ic_basis_single = [self.psi]
         self.ic_basis_double = []
@@ -1127,248 +1107,225 @@ class EOM_MRCC:
         diag_1 = list(np.zeros(len(self.ic_basis_single)))  # With Psi.
         diag_2 = list(np.zeros(len(self.ic_basis_double)))
 
-        if not self.add_int and not self.cas_int:
-            if decontract_active:
-                for i in self.dets:
-                    self.ic_basis.append(forte.SparseState({i: 1.0}))
-            else:
-                print("Use internally internal excitations. No GNO yet.")
+        if not self.cas_int:
+            print("Use internally internal excitations. No GNO yet.")
 
-                self.op_idx_single = self.op_idx[: self.num_op[0]]
-                self.op_idx_double = self.op_idx[self.num_op[0] :]
-                self.flip_single = self.flip[: self.num_op[0]]
-                self.flip_double = self.flip[self.num_op[0] :]
+            self.op_idx_single = self.op_idx[: self.num_op[0]]
+            self.op_idx_double = self.op_idx[self.num_op[0] :]
+            self.flip_single = self.flip[: self.num_op[0]]
+            self.flip_double = self.flip[self.num_op[0] :]
 
-                for n in range(1, internal_max_exc + 1):
-                    # loop over beta excitation level
-                    max_nb = min(n, nelecas[1])
-                    for nb in range(max_nb + 1):
-                        # We should at least have two electrons in active space.
-                        na = n - nb
-                        # loop over alpha occupied
-                        for ao in itertools.combinations(self.act, na):
-                            ao_sym = sym_dir_prod(ao, self.all_sym)
-                            # loop over alpha virtual
-                            for av in itertools.combinations(self.act, na):
-                                av_sym = sym_dir_prod(av, self.all_sym)
-                                # loop over beta occupied
-                                for bo in itertools.combinations(self.act, nb):
-                                    bo_sym = sym_dir_prod(bo, self.all_sym)
-                                    # loop over beta virtual
-                                    for bv in itertools.combinations(self.act, nb):
-                                        bv_sym = sym_dir_prod(bv, self.all_sym)
-                                        if (
-                                            ao_sym ^ av_sym ^ bo_sym ^ bv_sym
-                                            == self.sym
-                                        ):
-                                            T_op_temp = forte.SparseOperatorList()
-                                            l = (
-                                                []
-                                            )  # a list to hold the operator triplets
-                                            for i in ao:
-                                                # alpha occupied
-                                                l.append((False, True, i))
-                                            for i in bo:
-                                                # beta occupied
-                                                l.append((False, False, i))
-                                            for a in reversed(bv):
-                                                # beta virtual
-                                                l.append((True, False, a))
-                                            for a in reversed(av):
-                                                # alpha virtual
-                                                l.append((True, True, a))
+            for n in range(1, internal_max_exc + 1):
+                # loop over beta excitation level
+                max_nb = min(n, nelecas[1])
+                for nb in range(max_nb + 1):
+                    # We should at least have two electrons in active space.
+                    na = n - nb
+                    # loop over alpha occupied
+                    for ao in itertools.combinations(self.act, na):
+                        ao_sym = sym_dir_prod(ao, self.all_sym)
+                        # loop over alpha virtual
+                        for av in itertools.combinations(self.act, na):
+                            av_sym = sym_dir_prod(av, self.all_sym)
+                            # loop over beta occupied
+                            for bo in itertools.combinations(self.act, nb):
+                                bo_sym = sym_dir_prod(bo, self.all_sym)
+                                # loop over beta virtual
+                                for bv in itertools.combinations(self.act, nb):
+                                    bv_sym = sym_dir_prod(bv, self.all_sym)
+                                    if ao_sym ^ av_sym ^ bo_sym ^ bv_sym == self.sym:
+                                        T_op_temp = forte.SparseOperatorList()
+                                        l = []  # a list to hold the operator triplets
+                                        for i in ao:
+                                            # alpha occupied
+                                            l.append((False, True, i))
+                                        for i in bo:
+                                            # beta occupied
+                                            l.append((False, False, i))
+                                        for a in reversed(bv):
+                                            # beta virtual
+                                            l.append((True, False, a))
+                                        for a in reversed(av):
+                                            # alpha virtual
+                                            l.append((True, True, a))
 
-                                            op = []
-                                            for a in av:
-                                                op.append(f"{a}a+")
-                                            for a in bv:
-                                                op.append(f"{a}b+")
-                                            for i in reversed(bo):
-                                                op.append(f"{i}b-")
-                                            for i in reversed(ao):
-                                                op.append(f"{i}a-")
+                                        op = []
+                                        for a in av:
+                                            op.append(f"{a}a+")
+                                        for a in bv:
+                                            op.append(f"{a}b+")
+                                        for i in reversed(bo):
+                                            op.append(f"{i}b-")
+                                        for i in reversed(ao):
+                                            op.append(f"{i}a-")
 
-                                            # No reordering in principle.
-                                            T_op_temp.add_term(
-                                                l, 1.0, allow_reordering=False
+                                        # No reordering in principle.
+                                        T_op_temp.add_term(
+                                            l, 1.0, allow_reordering=False
+                                        )
+
+                                        idx = []
+                                        for item in l:
+                                            # (spin, orbital)
+                                            idx.append((item[1], item[2]))
+
+                                        if n == 1:
+                                            self.op_idx_single.append(idx)
+                                            self.flip_single.append(1.0)
+                                            self.ic_basis_single.append(
+                                                T_op_temp @ self.psi
+                                            )
+                                            r1_idx_1 = 0
+                                            r1_idx_2 = 0
+                                            if l[0][1] == True:
+                                                r1_idx_1 = 2 * self.act.index(l[0][2])
+                                            else:
+                                                r1_idx_1 = (
+                                                    2 * self.act.index(l[0][2]) + 1
+                                                )
+                                            if l[1][1] == True:
+                                                r1_idx_2 = 2 * self.act.index(l[1][2])
+                                            else:
+                                                r1_idx_2 = (
+                                                    2 * self.act.index(l[1][2]) + 1
+                                                )
+                                            diag_1.append(
+                                                -self.gamma1[r1_idx_1, r1_idx_2]
                                             )
 
-                                            idx = []
-                                            for item in l:
-                                                # (spin, orbital)
-                                                idx.append((item[1], item[2]))
-
-                                            if n == 1:
-                                                self.op_idx_single.append(idx)
-                                                self.flip_single.append(1.0)
-                                                self.ic_basis_single.append(
-                                                    T_op_temp @ self.psi
+                                        elif n == 2:
+                                            self.op_idx_double.append(idx)
+                                            self.flip_double.append(1.0)
+                                            self.ic_basis_double.append(
+                                                T_op_temp @ self.psi
+                                            )
+                                            r2_idx_1 = 0
+                                            r2_idx_2 = 0
+                                            r2_idx_3 = 0
+                                            r2_idx_4 = 0
+                                            if l[0][1] == True:
+                                                r2_idx_1 = 2 * self.act.index(l[0][2])
+                                            else:
+                                                r2_idx_1 = (
+                                                    2 * self.act.index(l[0][2]) + 1
                                                 )
-                                                r1_idx_1 = 0
-                                                r1_idx_2 = 0
-                                                if l[0][1] == True:
-                                                    r1_idx_1 = 2 * self.act.index(
-                                                        l[0][2]
-                                                    )
-                                                else:
-                                                    r1_idx_1 = (
-                                                        2 * self.act.index(l[0][2]) + 1
-                                                    )
-                                                if l[1][1] == True:
-                                                    r1_idx_2 = 2 * self.act.index(
-                                                        l[1][2]
-                                                    )
-                                                else:
-                                                    r1_idx_2 = (
-                                                        2 * self.act.index(l[1][2]) + 1
-                                                    )
-                                                diag_1.append(
-                                                    -self.gamma1[r1_idx_1, r1_idx_2]
+                                            if l[1][1] == True:
+                                                r2_idx_2 = 2 * self.act.index(l[1][2])
+                                            else:
+                                                r2_idx_2 = (
+                                                    2 * self.act.index(l[1][2]) + 1
                                                 )
-
-                                            elif n == 2:
-                                                self.op_idx_double.append(idx)
-                                                self.flip_double.append(1.0)
-                                                self.ic_basis_double.append(
-                                                    T_op_temp @ self.psi
+                                            if l[2][1] == True:
+                                                r2_idx_3 = 2 * self.act.index(l[2][2])
+                                            else:
+                                                r2_idx_3 = (
+                                                    2 * self.act.index(l[2][2]) + 1
                                                 )
-                                                r2_idx_1 = 0
-                                                r2_idx_2 = 0
-                                                r2_idx_3 = 0
-                                                r2_idx_4 = 0
-                                                if l[0][1] == True:
-                                                    r2_idx_1 = 2 * self.act.index(
-                                                        l[0][2]
-                                                    )
-                                                else:
-                                                    r2_idx_1 = (
-                                                        2 * self.act.index(l[0][2]) + 1
-                                                    )
-                                                if l[1][1] == True:
-                                                    r2_idx_2 = 2 * self.act.index(
-                                                        l[1][2]
-                                                    )
-                                                else:
-                                                    r2_idx_2 = (
-                                                        2 * self.act.index(l[1][2]) + 1
-                                                    )
-                                                if l[2][1] == True:
-                                                    r2_idx_3 = 2 * self.act.index(
-                                                        l[2][2]
-                                                    )
-                                                else:
-                                                    r2_idx_3 = (
-                                                        2 * self.act.index(l[2][2]) + 1
-                                                    )
-                                                if l[3][1] == True:
-                                                    r2_idx_4 = 2 * self.act.index(
-                                                        l[3][2]
-                                                    )
-                                                else:
-                                                    r2_idx_4 = (
-                                                        2 * self.act.index(l[3][2]) + 1
-                                                    )
-                                                diag_2.append(
-                                                    -self.gamma2[
-                                                        r2_idx_4,
-                                                        r2_idx_3,
-                                                        r2_idx_1,
-                                                        r2_idx_2,
-                                                    ]
-                                                    - 2
-                                                    * self.gamma1[r2_idx_1, r2_idx_3]
-                                                    * self.gamma1[r2_idx_2, r2_idx_4]
-                                                    + 2
-                                                    * self.gamma1[r2_idx_1, r2_idx_4]
-                                                    * self.gamma1[r2_idx_2, r2_idx_3]
+                                            if l[3][1] == True:
+                                                r2_idx_4 = 2 * self.act.index(l[3][2])
+                                            else:
+                                                r2_idx_4 = (
+                                                    2 * self.act.index(l[3][2]) + 1
                                                 )
+                                            diag_2.append(
+                                                -self.gamma2[
+                                                    r2_idx_4,
+                                                    r2_idx_3,
+                                                    r2_idx_1,
+                                                    r2_idx_2,
+                                                ]
+                                                - 2
+                                                * self.gamma1[r2_idx_1, r2_idx_3]
+                                                * self.gamma1[r2_idx_2, r2_idx_4]
+                                                + 2
+                                                * self.gamma1[r2_idx_1, r2_idx_4]
+                                                * self.gamma1[r2_idx_2, r2_idx_3]
+                                            )
 
-                n_single = len(self.ic_basis_single) - 1  # The first one is psi.
-                n_double = len(self.ic_basis_double)
+            n_single = len(self.ic_basis_single) - 1  # The first one is psi.
+            n_double = len(self.ic_basis_double)
 
-                n_single_int = n_single - self.num_op[0]
-                n_double_int = n_double - self.num_op[1]
+            n_single_int = n_single - self.num_op[0]
+            n_double_int = n_double - self.num_op[1]
 
-                self.ic_basis = self.ic_basis_single + self.ic_basis_double
+            self.ic_basis = self.ic_basis_single + self.ic_basis_double
 
+            print(
+                f"Number of used internal: {n_single_int+n_double_int, n_single_int, n_double_int}"
+            )
+
+            if self.verbose:
                 print(
-                    f"Number of used internal: {n_single_int+n_double_int, n_single_int, n_double_int}"
+                    f"Number of EOM basis function without psi (breakdown): {n_single, n_double}"
                 )
 
-                if self.verbose:
-                    print(
-                        f"Number of EOM basis function without psi (breakdown): {n_single, n_double}"
-                    )
+            self.op_idx = self.op_idx_single + self.op_idx_double
+            self.flip = self.flip_single + self.flip_double
 
-                self.op_idx = self.op_idx_single + self.op_idx_double
-                self.flip = self.flip_single + self.flip_double
+            # Generalized normal ordering.
+            print("GNO starts.")
+            self.gamma1_hp = np.zeros((len(self.hole) * 2, len(self.particle) * 2))
+            self.gamma1_hp[len(self.occ) * 2 :, : len(self.act) * 2] = (
+                self.gamma1.copy()
+            )
 
-                # Generalized normal ordering.
-                print("GNO starts.")
-                self.gamma1_hp = np.zeros((len(self.hole) * 2, len(self.particle) * 2))
-                self.gamma1_hp[len(self.occ) * 2 :, : len(self.act) * 2] = (
-                    self.gamma1.copy()
+            _P_full = np.zeros(
+                (
+                    len(self.hole) * 2,
+                    len(self.particle) * 2,
+                    len(self.particle) * 2,
+                    len(self.particle) * 2,
+                    len(self.hole) * 2,
+                    len(self.hole) * 2,
                 )
+            )
+            _I_hole = np.identity(len(self.hole) * 2)
+            _I_particle = np.identity(len(self.particle) * 2)
 
-                _P_full = np.zeros(
-                    (
-                        len(self.hole) * 2,
-                        len(self.particle) * 2,
-                        len(self.particle) * 2,
-                        len(self.particle) * 2,
-                        len(self.hole) * 2,
-                        len(self.hole) * 2,
-                    )
-                )
-                _I_hole = np.identity(len(self.hole) * 2)
-                _I_particle = np.identity(len(self.particle) * 2)
+            _hole_idx = {i: idx for idx, i in enumerate(self.hole)}
+            _particle_idx = {i: idx for idx, i in enumerate(self.particle)}
 
-                _hole_idx = {i: idx for idx, i in enumerate(self.hole)}
-                _particle_idx = {i: idx for idx, i in enumerate(self.particle)}
+            def _hole_spin_idx(s):
+                return _hole_idx[s[1]] * 2 if s[0] else _hole_idx[s[1]] * 2 + 1
 
-                def _hole_spin_idx(s):
-                    return _hole_idx[s[1]] * 2 if s[0] else _hole_idx[s[1]] * 2 + 1
+            def _particle_spin_idx(s):
+                return _particle_idx[s[1]] * 2 if s[0] else _particle_idx[s[1]] * 2 + 1
 
-                def _particle_spin_idx(s):
-                    return (
-                        _particle_idx[s[1]] * 2 if s[0] else _particle_idx[s[1]] * 2 + 1
-                    )
+            _P_full += np.einsum(
+                "ik,ab,jc->ibcajk", _I_hole, _I_particle, self.gamma1_hp
+            )
+            _P_full -= np.einsum(
+                "ik,ac,jb->ibcajk", _I_hole, _I_particle, self.gamma1_hp
+            )
+            _P_full += np.einsum(
+                "ij,ac,kb->ibcajk", _I_hole, _I_particle, self.gamma1_hp
+            )
+            _P_full -= np.einsum(
+                "ij,ab,kc->ibcajk", _I_hole, _I_particle, self.gamma1_hp
+            )
 
-                _P_full += np.einsum(
-                    "ik,ab,jc->ibcajk", _I_hole, _I_particle, self.gamma1_hp
-                )
-                _P_full -= np.einsum(
-                    "ik,ac,jb->ibcajk", _I_hole, _I_particle, self.gamma1_hp
-                )
-                _P_full += np.einsum(
-                    "ij,ac,kb->ibcajk", _I_hole, _I_particle, self.gamma1_hp
-                )
-                _P_full -= np.einsum(
-                    "ij,ab,kc->ibcajk", _I_hole, _I_particle, self.gamma1_hp
-                )
+            GNO_P_sub = np.zeros((n_single, n_double))
+            for isingle, s in enumerate(self.op_idx[:n_single]):
+                for idouble, d in enumerate(self.op_idx[n_single:]):
+                    GNO_P_sub[isingle, idouble] = _P_full[
+                        _hole_spin_idx(s[0]),
+                        _particle_spin_idx(d[3]),
+                        _particle_spin_idx(d[2]),
+                        _particle_spin_idx(s[1]),
+                        _hole_spin_idx(d[0]),
+                        _hole_spin_idx(d[1]),
+                    ]
 
-                GNO_P_sub = np.zeros((n_single, n_double))
-                for isingle, s in enumerate(self.op_idx[:n_single]):
-                    for idouble, d in enumerate(self.op_idx[n_single:]):
-                        GNO_P_sub[isingle, idouble] = _P_full[
-                            _hole_spin_idx(s[0]),
-                            _particle_spin_idx(d[3]),
-                            _particle_spin_idx(d[2]),
-                            _particle_spin_idx(s[1]),
-                            _hole_spin_idx(d[0]),
-                            _hole_spin_idx(d[1]),
-                        ]
+            for i in range(n_double):
+                GNO_P_sub[:, i] *= self.flip[i + n_single]
 
-                for i in range(n_double):
-                    GNO_P_sub[:, i] *= self.flip[i + n_single]
+            diag_total = diag_1 + diag_2
+            diag_total[0] = 1.0
+            self.GNO_P = np.identity(len(self.ic_basis))
+            self.GNO_P[1 : n_single + 1, 1 + n_single :] = GNO_P_sub.copy()
+            self.GNO_P[0, :] = np.array(diag_total).copy()
 
-                diag_total = diag_1 + diag_2
-                diag_total[0] = 1.0
-                self.GNO_P = np.identity(len(self.ic_basis))
-                self.GNO_P[1 : n_single + 1, 1 + n_single :] = GNO_P_sub.copy()
-                self.GNO_P[0, :] = np.array(diag_total).copy()
-
-                print("GNO ends.")
+            print("GNO ends.")
         print(f" Number of ic_basis for EOM_UMRCC: {len(self.ic_basis)}")
 
     def get_ic_coeff(self):

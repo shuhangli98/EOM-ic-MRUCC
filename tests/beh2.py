@@ -1,7 +1,8 @@
 import sys
 import os
+
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from eom_umrcc import *
+from eom_mrcc import *
 
 psi4.core.set_output_file("beh2.dat", False)
 geometry = """

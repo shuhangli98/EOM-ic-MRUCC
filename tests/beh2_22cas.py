@@ -1,7 +1,8 @@
 import sys
 import os
+
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from eom_umrcc import *
+from eom_mrcc import *
 
 # Symmetry test: edge case: 1 CAS electron per spin
 psi4.core.set_output_file("beh2_22cas.dat", False)
@@ -40,9 +41,7 @@ forte_options = {
     "casscf_g_convergence": 1e-6,
 }
 
-E_casscf, wfn_cas = psi4.energy(
-    "forte", forte_options=forte_options, return_wfn=True
-)
+E_casscf, wfn_cas = psi4.energy("forte", forte_options=forte_options, return_wfn=True)
 
 print(f"CASSCF Energy = {E_casscf}")
 
@@ -56,18 +55,15 @@ ic_mrcc = EOM_MRCC(
     screen_thresh_H=1e-12,
     screen_thresh_exp=1e-8,
     ortho="sokolov",
-    add_int=False,
     cas_int=False,
     commutator=False,
     n_comm=2,
 )
 ic_mrcc.get_casci_wfn([1, 1])
 ic_mrcc.initialize_op()
-ic_mrcc.run_ic_mrcc(
-    e_convergence=1e-9, max_cc_iter=200, eta=-1.0, thres=1e-4, algo="oprod"
-)
+ic_mrcc.run_ic_mrcc(e_convergence=1e-9, max_cc_iter=200, eta=-1.0, thres=1e-4)
 assert np.isclose(ic_mrcc.e, -15.728419439510, atol=1e-8)
-ic_mrcc.run_eom_ee_mrcc([1, 1], internal_max_exc=2, thres=1e-4, algo="oprod")
+ic_mrcc.run_eom_ee_mrcc([1, 1], internal_max_exc=2, thres=1e-4)
 assert np.isclose(ic_mrcc.eval_ic[1], -15.4610807626, atol=1e-8)
 assert np.isclose(ic_mrcc.eval_ic[2], -15.4009372621, atol=1e-8)
 assert np.isclose(ic_mrcc.eval_ic[3], -15.1776484883, atol=1e-8)

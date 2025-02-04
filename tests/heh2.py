@@ -1,7 +1,8 @@
 import sys
 import os
+
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from eom_umrcc import *
+from eom_mrcc import *
 
 psi4.core.set_output_file("heh2.dat", False)
 mol = psi4.geometry(
@@ -37,9 +38,7 @@ forte_options = {
     "casscf_g_convergence": 1e-6,
 }
 
-E_casscf, wfn_cas = psi4.energy(
-    "forte", forte_options=forte_options, return_wfn=True
-)
+E_casscf, wfn_cas = psi4.energy("forte", forte_options=forte_options, return_wfn=True)
 
 print(f"CASSCF Energy = {E_casscf}")
 
@@ -55,8 +54,6 @@ ic_mrcc = EOM_MRCC(
 )
 ic_mrcc.get_casci_wfn([1, 1])
 ic_mrcc.initialize_op()
-ic_mrcc.run_ic_mrcc(
-    e_convergence=1e-9, eta=-1.0, thres=1e-6, algo="oprod", max_cc_iter=100
-)
+ic_mrcc.run_ic_mrcc(e_convergence=1e-9, eta=-1.0, thres=1e-6, max_cc_iter=100)
 assert np.isclose(ic_mrcc.e, -3.862656342902, atol=1.0e-8)
 psi4.core.clean()

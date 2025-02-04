@@ -1,7 +1,8 @@
 import sys
 import os
+
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from eom_umrcc import *
+from eom_mrcc import *
 
 # Frozen core test.
 psi4.core.set_output_file("beh2_fc.dat", False)
@@ -40,9 +41,7 @@ forte_options = {
     "casscf_g_convergence": 1e-6,
 }
 
-E_casscf, wfn_cas = psi4.energy(
-    "forte", forte_options=forte_options, return_wfn=True
-)
+E_casscf, wfn_cas = psi4.energy("forte", forte_options=forte_options, return_wfn=True)
 
 print(f"CASSCF Energy = {E_casscf}")
 
@@ -63,5 +62,5 @@ ic_mrcc = EOM_MRCC(
 )
 ic_mrcc.get_casci_wfn([1, 1])
 ic_mrcc.initialize_op()
-ic_mrcc.run_ic_mrcc(e_convergence=1e-9, eta=-1.0, thres=1e-6, algo="oprod")
+ic_mrcc.run_ic_mrcc(e_convergence=1e-9, eta=-1.0, thres=1e-6)
 assert np.isclose(ic_mrcc.e, -15.728093663588, atol=1.0e-8)
