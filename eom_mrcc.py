@@ -36,18 +36,18 @@ def cc_residual_equations(op, ref, ham_op, exp_op, is_unitary, screen_thresh_H):
 
     # Step 1. Compute exp(S)|Phi>
     if is_unitary:
-        wfn = exp_op.apply_op(op, ref, scaling_factor=1.0)
-    else:
         wfn = exp_op.apply_antiherm(op, ref, scaling_factor=1.0)
+    else:
+        wfn = exp_op.apply_op(op, ref, scaling_factor=1.0)
 
     # Step 2. Compute H exp(S)|Phi>
     Hwfn = forte.apply_op(ham_op, wfn, screen_thresh_H)
 
     # Step 3. Compute exp(-S) H exp(S)|Phi>
     if is_unitary:
-        R = exp_op.apply_op(op, Hwfn, scaling_factor=-1.0)
-    else:
         R = exp_op.apply_antiherm(op, Hwfn, scaling_factor=-1.0)
+    else:
+        R = exp_op.apply_op(op, Hwfn, scaling_factor=-1.0)
 
     # Step 4. Project residual onto excited determinants: <Phi^{ab}_{ij}|R>
     residual = forte.get_projection(op, ref, R)
