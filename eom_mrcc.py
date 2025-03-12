@@ -931,6 +931,7 @@ class EOM_MRCC:
                             m = k - l
                             right_wfn = _Hwfn_map_full[i][m]
                             left_wfn = _wfn_map_full[j][l]
+                            # No factor since (-1)^l * (-1)^l = 1.
                             energy += forte.overlap(left_wfn, right_wfn).real / (
                                 math.factorial(l) * math.factorial(m)
                             )
@@ -1360,6 +1361,12 @@ class EOM_MRCC:
                 self.ic_coeff[loc, j] = coeff
 
     def get_hbar_commutator(self):
+        temp_op = forte.SparseOperatorList()
+        for iop in self.op_A:
+            temp_op.add(*iop)
+        operator_temp = temp_op.to_operator()
+        operator_temp_adj = operator_temp.adjoint()
+        operator = operator_temp - operator_temp_adj
         _wfn_map_full = []
         _Hwfn_map_full = []
         self.Hbar_ic = np.zeros((len(self.ic_basis),) * 2)
@@ -1370,7 +1377,7 @@ class EOM_MRCC:
             _wfn_list = [wfn_comm]
             _Hwfn_list = [Hwfn_comm]
             for _ in range(self.n_comm):
-                wfn_comm = forte.apply_op(self.op_A, wfn_comm)
+                wfn_comm = forte.apply_op(operator, wfn_comm)
                 Hwfn_comm = forte.apply_op(self.ham_op, wfn_comm, self.screen_thresh_H)
                 _wfn_list.append(wfn_comm)
                 _Hwfn_list.append(Hwfn_comm)
@@ -1379,18 +1386,22 @@ class EOM_MRCC:
             _Hwfn_map_full.append(_Hwfn_list)
 
         for ibasis in range(len(self.ic_basis)):
-            for jbasis in range(ibasis + 1):
+            for jbasis in range(len(self.ic_basis)):
                 energy = 0.0
                 for k in range(self.n_comm + 1):
                     for l in range(k + 1):
                         m = k - l
                         right_wfn = _Hwfn_map_full[ibasis][m]
                         left_wfn = _wfn_map_full[jbasis][l]
+                        # No factor since (-1)^l * (-1)^l = 1.
                         energy += forte.overlap(left_wfn, right_wfn).real / (
                             math.factorial(l) * math.factorial(m)
                         )
                 self.Hbar_ic[jbasis, ibasis] = energy
-                self.Hbar_ic[ibasis, jbasis] = energy
+                # self.Hbar_ic[ibasis, jbasis] = energy
+        if not np.allclose(self.Hbar_ic, self.Hbar_ic.T):
+            print("Warning: Hbar_ic is not symmetric.")
+            print(np.max(np.abs(self.Hbar_ic - self.Hbar_ic.T)))
 
     def get_hbar_oprod(self):
         self.Hbar_ic = np.zeros((len(self.ic_basis),) * 2)
