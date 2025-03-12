@@ -58,6 +58,7 @@ def cc_residual_equations(op, ref, ham_op, exp_op, is_unitary, screen_thresh_H):
 
 def cc_residual_equations_truncated(op, ref, ham_op, screen_thresh_H, n_comm):
     # This function is used to test the effect of truncation on the BCH expansion.
+    operator = op.to_operator()  # op is SparseOperatorList, operator is SparseOperator
     Hwfn = forte.apply_op(ham_op, ref, screen_thresh_H)
     residual = forte.get_projection(op, ref, Hwfn)
     residual = np.array(residual)
@@ -67,24 +68,22 @@ def cc_residual_equations_truncated(op, ref, ham_op, screen_thresh_H, n_comm):
             wfn_comm = ref
             m = k - l
             for _ in range(m):
-                wfn_comm = forte.apply_op(op, wfn_comm)
+                wfn_comm = forte.apply_op(operator, wfn_comm)
             wfn_comm = forte.apply_op(ham_op, wfn_comm, screen_thresh_H)
             for _ in range(l):
-                wfn_comm = forte.apply_op(op, wfn_comm)
-            if l % 2 == 0:
-                residual += np.array(forte.get_projection(op, ref, wfn_comm)) / (
-                    math.factorial(l) * math.factorial(m)
-                )
-                energy += forte.overlap(ref, wfn_comm).real / (
-                    math.factorial(l) * math.factorial(m)
-                )
-            else:
-                residual -= np.array(forte.get_projection(op, ref, wfn_comm).real) / (
-                    math.factorial(l) * math.factorial(m)
-                )
-                energy -= forte.overlap(ref, wfn_comm).real / (
-                    math.factorial(l) * math.factorial(m)
-                )
+                wfn_comm = forte.apply_op(operator, wfn_comm)
+
+            factor = 1.0 if l % 2 == 0 else -1.0
+            residual += (
+                factor
+                * np.array(forte.get_projection(op, ref, wfn_comm)).real
+                / (math.factorial(l) * math.factorial(m))
+            )
+            energy += (
+                factor
+                * forte.overlap(ref, wfn_comm).real
+                / (math.factorial(l) * math.factorial(m))
+            )
 
     return (residual, energy)
 
@@ -794,7 +793,6 @@ class EOM_MRCC:
         # initialize T = 0
         self.t = [0.0] * len(op)
         op.set_coefficients(self.t)
-
         diis = DIIS(self.t, diis_start=3)
         # diis = None
 
@@ -890,6 +888,7 @@ class EOM_MRCC:
     def form_ic_mrcc_heff(self, op):
         Heff = np.zeros((len(self.dets), len(self.dets)))
         if self.commutator:
+            operator = op.to_operator()
             _wfn_map_full = []
             _Hwfn_map_full = []
             for i in range(len(self.dets)):
@@ -899,7 +898,7 @@ class EOM_MRCC:
                 _wfn_list = [wfn_comm]
                 _Hwfn_list = [Hwfn_comm]
                 for _ in range(self.n_comm):
-                    wfn_comm = forte.apply_op(op, wfn_comm)
+                    wfn_comm = forte.apply_op(operator, wfn_comm)
                     Hwfn_comm = forte.apply_op(
                         self.ham_op, wfn_comm, self.screen_thresh_H
                     )
