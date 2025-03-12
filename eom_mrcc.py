@@ -58,7 +58,9 @@ def cc_residual_equations(op, ref, ham_op, exp_op, is_unitary, screen_thresh_H):
 
 def cc_residual_equations_truncated(op, ref, ham_op, screen_thresh_H, n_comm):
     # This function is used to test the effect of truncation on the BCH expansion.
-    operator = op.to_operator()  # op is SparseOperatorList, operator is SparseOperator
+    operator_temp = op.to_operator()
+    operator_temp_adj = operator_temp.adjoint()
+    operator = operator_temp - operator_temp_adj
     Hwfn = forte.apply_op(ham_op, ref, screen_thresh_H)
     residual = forte.get_projection(op, ref, Hwfn)
     residual = np.array(residual)
@@ -567,7 +569,7 @@ class EOM_MRCC:
         # Initialize excitation operators.
         self.op_A = forte.SparseOperatorList()  # For MRUCC
         self.op_T = forte.SparseOperatorList()  # For MRCC
-        self.oprator_list = []
+        self.operator_list = []
         self.denominators = []
         self.ic_basis = [self.psi]
 
@@ -688,7 +690,7 @@ class EOM_MRCC:
 
                                         self.num_op[n - 1] += 1
                                         self.ic_basis.append(T_op_temp @ self.psi)
-                                        self.oprator_list.append(
+                                        self.operator_list.append(
                                             T_op_temp.to_operator()
                                         )
                                         # a_{ij..}^{ab..} * (t_{ij..}^{ab..} - t_{ab..}^{ij..})
@@ -842,7 +844,7 @@ class EOM_MRCC:
             )
 
             # 3. Form Heff
-            Heff = self.form_ic_mrcc_heff(op)
+            Heff = self.form_ic_mrcc_heff(self.operator_list, op)
             w, vr = scipy.linalg.eig(Heff)
             vr = np.real(vr)
             idx = np.argmin(np.real(w))
@@ -860,11 +862,11 @@ class EOM_MRCC:
             # 5. check for convergence of the energy
             self.ic_basis = ic_basis_new.copy()
             if abs(self.e - old_e) < e_convergence:
-                self.psi_coeff = vr[:, idx]
                 print(
                     "================================================================="
                 )
                 print(f" ic-MRCCSD energy: {self.e:20.12f} [Eh]")
+                self.psi_coeff = vr[:, idx]
                 P, S, X, numnonred = orthogonalization(
                     ic_basis_new, thres=thres, distribution_print=False
                 )
@@ -885,10 +887,23 @@ class EOM_MRCC:
                 break
             old_e = self.e
 
-    def form_ic_mrcc_heff(self, op):
+    def form_ic_mrcc_heff(self, op_list, op):
+        temp_op = forte.SparseOperatorList()
+        for iop in op:
+            temp_op.add(*iop)
+
+        # This is not necessary since Hbar is naturally connected.
+        # if self.ortho == "GNO":
+        #     coeff = np.array(temp_op.coefficients())
+        #     coeff = (coeff.reshape(1, -1) @ self.GNO_Y).flatten()
+        #     temp_op.set_coefficients(coeff)
+
         Heff = np.zeros((len(self.dets), len(self.dets)))
         if self.commutator:
-            operator = op.to_operator()
+            # if False:
+            operator_temp = temp_op.to_operator()
+            operator_temp_adj = operator_temp.adjoint()
+            operator = operator_temp - operator_temp_adj
             _wfn_map_full = []
             _Hwfn_map_full = []
             for i in range(len(self.dets)):
@@ -909,7 +924,7 @@ class EOM_MRCC:
                 _Hwfn_map_full.append(_Hwfn_list)
 
             for i in range(len(self.dets)):
-                for j in range(i + 1):
+                for j in range(len(self.dets)):
                     energy = 0.0
                     for k in range(self.n_comm + 1):
                         for l in range(k + 1):
@@ -919,8 +934,13 @@ class EOM_MRCC:
                             energy += forte.overlap(left_wfn, right_wfn).real / (
                                 math.factorial(l) * math.factorial(m)
                             )
-                    Heff[j, i] = energy
+                    # Heff[j, i] = energy
                     Heff[i, j] = energy
+
+            if not np.allclose(Heff, Heff.T):
+                print("Warning: Heff is not symmetric.")
+                print(np.max(np.abs(Heff - Heff.T)))
+
         else:
             if self.unitary:
                 _wfn_list = []
@@ -936,7 +956,10 @@ class EOM_MRCC:
                 for i in range(len(self.dets)):
                     for j in range(len(self.dets)):
                         Heff[i, j] = forte.overlap(_wfn_list[i], _Hwfn_list[j]).real
-                        Heff[j, i] = Heff[i, j]
+                        # Heff[j, i] = Heff[i, j]
+                if not np.allclose(Heff, Heff.T):
+                    print("Warning: Heff is not symmetric.")
+                    print(np.max(np.abs(Heff - Heff.T)))
             else:
                 Heff = np.zeros((len(self.dets), len(self.dets)))
                 for i in range(len(self.dets)):
@@ -979,8 +1002,8 @@ class EOM_MRCC:
 
     def make_new_ic_basis(self):
         ic_basis_new = [self.psi]
-        for i in range(len(self.oprator_list)):
-            ic_basis_new.append(forte.apply_op(self.oprator_list[i], self.psi))
+        for i in range(len(self.operator_list)):
+            ic_basis_new.append(forte.apply_op(self.operator_list[i], self.psi))
         return ic_basis_new
 
     def run_eom_ee_mrcc(
@@ -1097,10 +1120,10 @@ class EOM_MRCC:
         self.ic_basis_single = [self.psi]
         self.ic_basis_double = []
         for x in range(self.num_op[0]):
-            self.ic_basis_single.append(self.oprator_list[x] @ self.psi)
+            self.ic_basis_single.append(self.operator_list[x] @ self.psi)
         for y in range(self.num_op[1]):
             self.ic_basis_double.append(
-                self.oprator_list[y + self.num_op[0]] @ self.psi
+                self.operator_list[y + self.num_op[0]] @ self.psi
             )
 
         diag_1 = list(np.zeros(len(self.ic_basis_single)))  # With Psi.
