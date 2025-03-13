@@ -844,7 +844,7 @@ class EOM_MRCC:
             )
 
             # 3. Form Heff
-            Heff = self.form_ic_mrcc_heff(self.operator_list, op)
+            Heff = self.form_ic_mrcc_heff(op)
             w, vr = scipy.linalg.eig(Heff)
             vr = np.real(vr)
             idx = np.argmin(np.real(w))
@@ -887,7 +887,7 @@ class EOM_MRCC:
                 break
             old_e = self.e
 
-    def form_ic_mrcc_heff(self, op_list, op):
+    def form_ic_mrcc_heff(self, op):
         temp_op = forte.SparseOperatorList()
         for iop in op:
             temp_op.add(*iop)
