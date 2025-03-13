@@ -782,6 +782,7 @@ class EOM_MRCC:
         eta=0.1,
         thres=1e-4,
         thres_double=1e-8,
+        relax="iterate",
     ):
         start = time.time()
         if self.unitary:
@@ -844,28 +845,42 @@ class EOM_MRCC:
             )
 
             # 3. Form Heff
-            Heff = self.form_ic_mrcc_heff(op)
-            w, vr = scipy.linalg.eig(Heff)
-            vr = np.real(vr)
-            idx = np.argmin(np.real(w))
-            self.psi = forte.SparseState(dict(zip(self.dets, vr[:, idx])))
-            ic_basis_new = self.make_new_ic_basis()
+            if relax == "iterate":
+                print("Iterative relaxation")
+                Heff = self.form_ic_mrcc_heff(op)
+                w, vr = scipy.linalg.eig(Heff)
+                vr = np.real(vr)
+                idx = np.argmin(np.real(w))
+                self.psi = forte.SparseState(dict(zip(self.dets, vr[:, idx])))
+                ic_basis_new = self.make_new_ic_basis()
 
-            P, S, X, numnonred = self.orthogonalize_ic_mrcc(
-                ic_basis_new, thres, thres_double
-            )
+                P, S, X, numnonred = self.orthogonalize_ic_mrcc(
+                    ic_basis_new, thres, thres_double
+                )
+                self.ic_basis = ic_basis_new.copy()
             # 4. print information
             print(
                 f"{iter:9d} {self.e:20.12f} {self.e - old_e:20.12f} {time.time() - start:11.3f}"
             )
 
             # 5. check for convergence of the energy
-            self.ic_basis = ic_basis_new.copy()
             if abs(self.e - old_e) < e_convergence:
                 print(
                     "================================================================="
                 )
                 print(f" ic-MRCCSD energy: {self.e:20.12f} [Eh]")
+                if relax != "iterate":
+                    print(f"Reference relaxation...")
+                    Heff = self.form_ic_mrcc_heff(op)
+                    w, vr = scipy.linalg.eig(Heff)
+                    vr = np.real(vr)
+                    idx = np.argmin(np.real(w))
+                    print(
+                        f" ic-MRCCSD energy (Relaxed): {np.min(np.real(w)):20.12f} [Eh]"
+                    )
+                    self.psi = forte.SparseState(dict(zip(self.dets, vr[:, idx])))
+                    ic_basis_new = self.make_new_ic_basis()
+                    self.ic_basis = ic_basis_new.copy()
                 self.psi_coeff = vr[:, idx]
                 P, S, X, numnonred = orthogonalization(
                     ic_basis_new, thres=thres, distribution_print=False
