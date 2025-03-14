@@ -783,6 +783,7 @@ class EOM_MRCC:
         thres=1e-4,
         thres_double=1e-8,
         relax="iterate",
+        max_relax=20,
     ):
         start = time.time()
         if self.unitary:
@@ -793,6 +794,9 @@ class EOM_MRCC:
         # This is a full ic_basis which contains psi_casci.
         ic_basis = self.ic_basis
 
+        if relax == "once":
+            max_relax = 1
+
         # initialize T = 0
         self.t = [0.0] * len(op)
         op.set_coefficients(self.t)
@@ -802,6 +806,7 @@ class EOM_MRCC:
         # initalize E = 0
         self.e = self.e_casci
         old_e = 0.0
+        old_e_relax = 0.0
 
         print("=================================================================")
         print("   Iteration     Energy (Eh)       Delta Energy (Eh)    Time (s)")
@@ -810,97 +815,120 @@ class EOM_MRCC:
 
         radius = 0.01
 
-        for iter in range(max_cc_iter):
-            # 1. evaluate the CC residual equations.
-            if self.commutator:
-                self.residual, self.e = cc_residual_equations_truncated(
-                    op, self.psi, self.ham_op, self.screen_thresh_H, n_comm=self.n_comm
-                )  # Truncated BCH expansion.
-            else:
-                self.residual, self.e = cc_residual_equations(
+        for irelax in range(max_relax):
+            for iter in range(max_cc_iter):
+                # 1. evaluate the CC residual equations.
+                if self.commutator:
+                    self.residual, self.e = cc_residual_equations_truncated(
+                        op,
+                        self.psi,
+                        self.ham_op,
+                        self.screen_thresh_H,
+                        n_comm=self.n_comm,
+                    )  # Truncated BCH expansion.
+                else:
+                    self.residual, self.e = cc_residual_equations(
+                        op,
+                        self.psi,
+                        self.ham_op,
+                        self.exp_op,
+                        self.unitary,
+                        self.screen_thresh_H,
+                    )  # Full BCH expansion.
+                if (self.e.real - old_e.real) > 0.0:
+                    if radius > 1e-7:
+                        radius /= 2.0
+
+                # 2. update the CC equations
+                update_amps_orthogonal(
+                    self.residual,
+                    self.denominators,
                     op,
-                    self.psi,
-                    self.ham_op,
-                    self.exp_op,
-                    self.unitary,
-                    self.screen_thresh_H,
-                )  # Full BCH expansion.
-            if (self.e.real - old_e.real) > 0.0:
-                if radius > 1e-7:
-                    radius /= 2.0
-
-            # 2. update the CC equations
-            update_amps_orthogonal(
-                self.residual,
-                self.denominators,
-                op,
-                self.t,
-                P,
-                S,
-                X,
-                numnonred,
-                update_radius=radius,
-                eta=eta,
-                diis=diis,
-            )
-
-            # 3. Form Heff
-            if relax == "iterate":
-                print("Iterative relaxation")
-                Heff = self.form_ic_mrcc_heff(op)
-                w, vr = scipy.linalg.eig(Heff)
-                vr = np.real(vr)
-                idx = np.argmin(np.real(w))
-                self.psi = forte.SparseState(dict(zip(self.dets, vr[:, idx])))
-                ic_basis_new = self.make_new_ic_basis()
-
-                P, S, X, numnonred = self.orthogonalize_ic_mrcc(
-                    ic_basis_new, thres, thres_double
+                    self.t,
+                    P,
+                    S,
+                    X,
+                    numnonred,
+                    update_radius=radius,
+                    eta=eta,
+                    diis=diis,
                 )
-                self.ic_basis = ic_basis_new.copy()
-            # 4. print information
-            print(
-                f"{iter:9d} {self.e:20.12f} {self.e - old_e:20.12f} {time.time() - start:11.3f}"
-            )
 
-            # 5. check for convergence of the energy
-            if abs(self.e - old_e) < e_convergence:
+                # 3. print information
                 print(
-                    "================================================================="
+                    f"{iter:9d} {self.e:20.12f} {self.e - old_e:20.12f} {time.time() - start:11.3f}"
                 )
-                print(f" ic-MRCCSD energy: {self.e:20.12f} [Eh]")
-                if relax != "iterate":
-                    print(f"Reference relaxation...")
+
+                # 4. Check for convergence of the cluster amplitudes
+                if abs(self.e - old_e) < e_convergence:
+                    # Form effective Hamiltonian and find lowest eigenvalue/vector
                     Heff = self.form_ic_mrcc_heff(op)
                     w, vr = scipy.linalg.eig(Heff)
                     vr = np.real(vr)
                     idx = np.argmin(np.real(w))
-                    print(
-                        f" ic-MRCCSD energy (Relaxed): {np.min(np.real(w)):20.12f} [Eh]"
-                    )
+                    relaxed_e = np.min(np.real(w))
+                    self.e = relaxed_e  # Both are relaxed
+                    print(f" ic-MRCCSD energy: {relaxed_e:20.12f} [Eh]")
+
+                    # Check if relaxed energy is converged
+                    if abs(self.e - old_e_relax) < e_convergence:
+                        print(
+                            "================================================================="
+                        )
+                        print(f"Final ic-MRCCSD energy: {self.e:20.12f} [Eh]")
+                        print(f"The algorithm converges in {irelax} iterations")
+                        if self.verbose:
+                            print(
+                                f"Number of selected operators for ic-MRCCSD: {numnonred}"
+                            )
+                            print(f"Number of possible CAS internal: {len(w)-1}")
+
+                        # Handle CAS internal states if needed
+                        if self.cas_int:
+                            for i in range(len(w)):
+                                if i != idx:
+                                    cas_psi = forte.SparseState(
+                                        dict(zip(self.dets, vr[:, i]))
+                                    )
+                                    self.ic_basis.append(cas_psi)
+                            if self.verbose:
+                                print(
+                                    f" Number of ic_basis for EOM_UMRCC (CAS Internal): {len(self.ic_basis)}"
+                                )
+
+                        return
+
+                    # If relaxed energy not converged, update reference and continue
+                    print(f"Reference relaxation {irelax + 1}...")
+
+                    # Update reference wavefunction to the lowest eigenvector
                     self.psi = forte.SparseState(dict(zip(self.dets, vr[:, idx])))
+
+                    # Create new IC basis with the updated reference
                     ic_basis_new = self.make_new_ic_basis()
                     self.ic_basis = ic_basis_new.copy()
-                self.psi_coeff = vr[:, idx]
-                P, S, X, numnonred = orthogonalization(
-                    ic_basis_new, thres=thres, distribution_print=False
-                )
-                if self.verbose:
-                    print(f"Number of selected operators for ic-MRCCSD: {numnonred}")
-                    print(f"Number of possible CAS internal: {len(w)-1}")
 
-                if self.cas_int:
-                    for i in range(len(w)):
-                        if i != idx:
-                            cas_psi = forte.SparseState(dict(zip(self.dets, vr[:, i])))
-                            self.ic_basis.append(cas_psi)
-                    if self.verbose:
-                        print(
-                            f" Number of ic_basis for EOM_UMRCC (CAS Internal): {len(self.ic_basis)}"
-                        )
+                    # Re-orthogonalize with the new basis
+                    P, S, X, numnonred = orthogonalization(
+                        ic_basis_new, thres=thres, distribution_print=False
+                    )
 
-                break
-            old_e = self.e
+                    # Reset energy for the next amplitude iteration
+                    old_e = 0.0
+                    break
+
+                old_e = self.e  # Both are not relaxed.
+
+            old_e_relax = self.e
+
+            # Check if we've reached maximum iterations without convergence
+            if iter == max_cc_iter - 1:
+                print("Warning: CC iterations did not converge for this reference")
+
+        print(
+            "Warning: Maximum reference relaxation iterations reached without convergence"
+        )
+        return
 
     def form_ic_mrcc_heff(self, op):
         temp_op = forte.SparseOperatorList()
@@ -1060,7 +1088,7 @@ class EOM_MRCC:
         S = np.diag(1.0 / np.sqrt(eigval[eigval > thres]))
         U = eigvec[:, eigval > thres]
 
-        print(f"Number of selected operators for EOM-UMRCCSD: {numnonred}")
+        print(f"Number of selected operators for EOM-MRUCCSD: {numnonred}")
         X_tilde = U @ S
 
         H_ic_tilde = X_tilde.T @ self.Hbar_ic @ X_tilde
@@ -1364,7 +1392,7 @@ class EOM_MRCC:
             self.GNO_P[0, :] = np.array(diag_total).copy()
 
             print("GNO ends.")
-        print(f" Number of ic_basis for EOM_UMRCC: {len(self.ic_basis)}")
+        print(f"Number of ic_basis for EOM-MRUCC: {len(self.ic_basis)}")
 
     def get_ic_coeff(self):
         self.ic_coeff = np.zeros((len(self.dets_fci), len(self.ic_basis)))
