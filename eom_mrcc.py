@@ -778,6 +778,7 @@ class EOM_MRCC:
     def run_ic_mrcc(
         self,
         e_convergence=1.0e-12,
+        e_convergence_cc=1.0e-6,
         max_cc_iter=500,
         eta=0.1,
         thres=1e-4,
@@ -804,7 +805,6 @@ class EOM_MRCC:
         # diis = None
 
         # initalize E = 0
-        self.e = self.e_casci
         old_e = 0.0
         old_e_relax = 0.0
 
@@ -813,9 +813,8 @@ class EOM_MRCC:
         print("-----------------------------------------------------------------")
         P, S, X, numnonred = self.orthogonalize_ic_mrcc(ic_basis, thres, thres_double)
 
-        radius = 0.01
-
         for irelax in range(max_relax):
+            radius = 0.01
             for iter in range(max_cc_iter):
                 # 1. evaluate the CC residual equations.
                 if self.commutator:
@@ -859,8 +858,12 @@ class EOM_MRCC:
                     f"{iter:9d} {self.e:20.12f} {self.e - old_e:20.12f} {time.time() - start:11.3f}"
                 )
 
+                if iter == max_cc_iter - 1:
+                    print("Warning: CC iterations did not converge for this reference")
+                    return
+
                 # 4. Check for convergence of the cluster amplitudes
-                if abs(self.e - old_e) < e_convergence:
+                if abs(self.e - old_e) < e_convergence_cc:
                     # Form effective Hamiltonian and find lowest eigenvalue/vector
                     Heff = self.form_ic_mrcc_heff(op)
                     w, vr = scipy.linalg.eig(Heff)
@@ -921,13 +924,10 @@ class EOM_MRCC:
 
             old_e_relax = self.e
 
-            # Check if we've reached maximum iterations without convergence
-            if iter == max_cc_iter - 1:
-                print("Warning: CC iterations did not converge for this reference")
-
         print(
             "Warning: Maximum reference relaxation iterations reached without convergence"
         )
+
         return
 
     def form_ic_mrcc_heff(self, op):
